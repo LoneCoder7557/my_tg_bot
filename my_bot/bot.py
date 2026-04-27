@@ -8,9 +8,9 @@ from datetime import datetime, date, timedelta
 from pathlib import Path
 from html import escape
 
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import Bot, Dispatcher, F, types, BaseMiddleware
 from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, FSInputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, FSInputFile, LabeledPrice
 from aiohttp import web
 
 TOKEN_FILE = "token.txt"
@@ -24,7 +24,10 @@ MEDIA_DIR = Path("media")
 MAX_LEVEL = 100
 CARD_UNLOCK_FRAGMENTS = 100
 FRIEND_ID_DEFAULT = "527802531"
-CHOICE_TIMEOUT_SECONDS = 15
+CHOICE_TIMEOUT_SECONDS = 20
+CHOICE_WARN_10_AFTER = 10
+CHOICE_WARN_5_AFTER = 15
+PASS_PRICE_STARS = 149
 
 ARENAS = {
     "ruins": ("🏛", "Руины мультивселенной", "ломаная арена с укрытиями, где важны скорость и контроль"),
@@ -54,74 +57,72 @@ BATTLE_EVENTS = [
 ]
 
 RARITY_WEIGHTS = {
-    "Обычный": 700,
-    "Редкий": 200,
-    "Эпический": 80,
-    "Легендарный": 20,
-    "Мифический": 10,
+    # Обычных больше всего; дальше шанс падает. Мифические — самые редкие.
+    "Обычный": 760,
+    "Редкий": 190,
+    "Эпический": 45,
+    "Легендарный": 14,
+    "Мифический": 4,
 }
 
 FREE_PACK_WEIGHTS = {
-    "Обычный": 69,
-    "Редкий": 21,
-    "Эпический": 10,
-    "Легендарный": 0,
+    "Обычный": 78,
+    "Редкий": 18,
+    "Эпический": 4,
     "Мифический": 0,
+    "Легендарный": 0,
 }
 
 BATTLE_PLAYER_WEIGHTS = {
-    # Основная арена: меньше мусора, чаще редкие и эпические.
-    "Обычный": 340,
-    "Редкий": 330,
-    "Эпический": 220,
-    "Легендарный": 80,
-    "Мифический": 30,
-}
-
-OWNER_BATTLE_WEIGHTS = {
-    # Для владельца тесты не должны быть унизительными.
-    "Обычный": 120,
-    "Редкий": 260,
-    "Эпический": 320,
-    "Легендарный": 220,
-    "Мифический": 80,
-}
-
-RIGHT_HAND_BATTLE_WEIGHTS = {
-    "Обычный": 250,
-    "Редкий": 330,
-    "Эпический": 260,
-    "Легендарный": 120,
-    "Мифический": 40,
-}
-
-BOT_BATTLE_WEIGHTS_NEWBIE = {
-    # До 10 уровня бот не должен душить легендами.
-    "Обычный": 690,
-    "Редкий": 260,
-    "Эпический": 50,
-    "Легендарный": 0,
-    "Мифический": 0,
-}
-
-BOT_BATTLE_WEIGHTS_NORMAL = {
-    "Обычный": 520,
-    "Редкий": 300,
-    "Эпический": 140,
+    "Обычный": 600,
+    "Редкий": 250,
+    "Эпический": 100,
     "Легендарный": 35,
-    "Мифический": 5,
-}
-
-RARE_PACK_WEIGHTS = {
-    "Обычный": 480,
-    "Редкий": 300,
-    "Эпический": 160,
-    "Легендарный": 45,
     "Мифический": 15,
 }
 
+OWNER_BATTLE_WEIGHTS = {
+    "Обычный": 120,
+    "Редкий": 220,
+    "Эпический": 260,
+    "Легендарный": 240,
+    "Мифический": 160,
+}
+
+RIGHT_HAND_BATTLE_WEIGHTS = {
+    "Обычный": 220,
+    "Редкий": 280,
+    "Эпический": 260,
+    "Легендарный": 160,
+    "Мифический": 80,
+}
+
+BOT_BATTLE_WEIGHTS_NEWBIE = {
+    "Обычный": 760,
+    "Редкий": 210,
+    "Эпический": 30,
+    "Мифический": 0,
+    "Легендарный": 0,
+}
+
+BOT_BATTLE_WEIGHTS_NORMAL = {
+    "Обычный": 650,
+    "Редкий": 235,
+    "Эпический": 85,
+    "Легендарный": 22,
+    "Мифический": 8,
+}
+
+RARE_PACK_WEIGHTS = {
+    "Обычный": 560,
+    "Редкий": 270,
+    "Эпический": 125,
+    "Легендарный": 35,
+    "Мифический": 10,
+}
+
 CASE_WEIGHTS = {
-    "mystic": {"Обычный": 0, "Редкий": 200, "Эпический": 400, "Легендарный": 280, "Мифический": 120},
+    "mystic": {"Обычный": 0, "Редкий": 200, "Эпический": 400, "Легендарный": 320, "Мифический": 80},
     "event": {"Обычный": 300, "Редкий": 350, "Эпический": 220, "Легендарный": 100, "Мифический": 30},
     "holiday": {"Обычный": 450, "Редкий": 320, "Эпический": 170, "Легендарный": 50, "Мифический": 10},
 }
@@ -177,7 +178,7 @@ SHOP_PACKS = {
         "name": "Королевский сундук",
         "base_cost": 3000,
         "count": 6,
-        "weights": {"Обычный": 250, "Редкий": 300, "Эпический": 260, "Легендарный": 150, "Мифический": 40},
+        "weights": {"Обычный": 430, "Редкий": 270, "Эпический": 190, "Мифический": 80, "Легендарный": 30},
         "description": "Дорогой сундук с высоким шансом эпических и легендарных карт.",
     },
 }
@@ -225,14 +226,16 @@ BUFFS = [
 ]
 
 DEBUFFS = [
-    {"name": "Оглушение после ульты", "text": "после главной техники персонаж пропускает 1 активный ход", "delta": {"speed": -28, "team": -18}},
-    {"name": "Лимит формы", "text": "форма активна коротко; после пика идёт резкая просадка", "delta": {"power": -24, "durability": -22}},
-    {"name": "Перегрев", "text": "после 5 сильных атак резко падает темп", "delta": {"speed": -30, "power": -12}},
-    {"name": "Заморозка тела", "text": "после трёх активных ходов может быть временно выключен", "delta": {"speed": -24, "iq": -14, "team": -14}},
-    {"name": "Цена техники", "text": "главная способность сжигает ресурс и снижает выживаемость", "delta": {"hax": -22, "durability": -20}},
-    {"name": "Сломанная синергия", "text": "хуже слушает командный план и ломает связки", "delta": {"team": -34}},
-    {"name": "Медленный старт", "text": "в начале боя реагирует поздно и отдаёт инициативу", "delta": {"speed": -34}},
-    {"name": "Откат после серии", "text": "после серии атак защита временно проваливается", "delta": {"durability": -30}},
+    {"name": "Оглушение после ульты", "text": "после главной техники персонаж глохнет на 10 секунд и теряет следующий активный ход", "delta": {"speed": -34, "team": -22}},
+    {"name": "Лимит формы", "text": "пиковая форма держится коротко; после рывка сила резко проседает", "delta": {"power": -30, "durability": -24}},
+    {"name": "Перегрев", "text": "после серии сильных атак тело перегревается, темп падает почти до нуля", "delta": {"speed": -36, "power": -18}},
+    {"name": "Заморозка тела", "text": "после активного окна персонаж застывает на месте и становится лёгкой целью", "delta": {"speed": -32, "iq": -16, "team": -16}},
+    {"name": "Цена техники", "text": "главная способность сжигает ресурс: защита и выносливость резко падают", "delta": {"hax": -26, "durability": -24}},
+    {"name": "Сломанная синергия", "text": "персонаж ломает командный план и плохо слушает союзников", "delta": {"team": -40}},
+    {"name": "Медленный старт", "text": "первые секунды реагирует слишком поздно и отдаёт инициативу", "delta": {"speed": -38}},
+    {"name": "Откат после серии", "text": "после комбо защита раскрывается на 5 секунд", "delta": {"durability": -34}},
+    {"name": "Срыв концентрации", "text": "при давлении теряет контроль техники и ошибается в тайминге", "delta": {"iq": -28, "hax": -18}},
+    {"name": "Самооткат", "text": "слишком сильный плюс активен недолго, затем персонаж сам себя выключает", "delta": {"power": -22, "speed": -22, "team": -14}},
 ]
 
 ARTIFACTS = [
@@ -358,6 +361,20 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 
+class AutoCleanCallbackMiddleware(BaseMiddleware):
+    """Удаляет старое кнопочное окно перед открытием нового раздела."""
+    async def __call__(self, handler, event, data):
+        try:
+            if isinstance(event, types.CallbackQuery) and event.message and event.data != "noop":
+                await event.message.delete()
+        except Exception:
+            pass
+        return await handler(event, data)
+
+
+dp.callback_query.middleware(AutoCleanCallbackMiddleware())
+
+
 def rarity_label(rarity):
     return f"{RARITY_EMOJI.get(rarity, '⚪')} {rarity}"
 
@@ -434,6 +451,7 @@ def get_user_data(user):
             "last_daily": "",
             "last_free_pack": "",
             "free_pack_notified": False,
+            "last_free_notice": "",
             "collection": {},
             "badges": [],
             "premium": False,
@@ -444,6 +462,9 @@ def get_user_data(user):
             "nickname": "",
             "pass_xp": 0,
             "pass_premium": False,
+            "claimed_pass_free": [],
+            "claimed_pass_premium": [],
+            "stars_earned": 0,
         }
         # Стартовая коллекция: чтобы новичок мог сразу войти в арену своими картами.
         starter_ids = ["levi_peak", "mikasa", "kirito_alicization", "gon_base", "tanjiro_sun"]
@@ -455,8 +476,8 @@ def get_user_data(user):
         player["fistiks"] = player.get("coins", 250)
     for k, v in {
         "xp": 0, "badges": [], "premium": False, "used_promos": [], "last_daily": "",
-        "last_free_pack": "", "free_pack_notified": False, "ref_by": "", "ref_count": 0,
-        "wins": 0, "losses": 0, "battles": 0, "last_seen": "", "ref_earned": 0, "nickname": "", "pass_xp": 0, "pass_premium": False,
+        "last_free_pack": "", "free_pack_notified": False, "last_free_notice": "", "ref_by": "", "ref_count": 0,
+        "wins": 0, "losses": 0, "battles": 0, "last_seen": "", "ref_earned": 0, "nickname": "", "pass_xp": 0, "pass_premium": False, "claimed_pass_free": [], "claimed_pass_premium": [], "stars_earned": 0,
     }.items():
         player.setdefault(k, v)
     if player.get("nickname"):
@@ -492,22 +513,38 @@ def get_user_data(user):
 
 def main_menu(user_id=None):
     rows = [
-        [InlineKeyboardButton(text="🌌 Арена мультивселенной", callback_data="battle:start"), InlineKeyboardButton(text="🧬 Колода", callback_data="deck")],
-        [InlineKeyboardButton(text="🌐 Онлайн-бой", callback_data="online_search"), InlineKeyboardButton(text="🎮 Режимы", callback_data="modes")],
-        [InlineKeyboardButton(text="🃏 Коллекция", callback_data="collection:page:0"), InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
-        [InlineKeyboardButton(text="📦 Магазин", callback_data="shop"), InlineKeyboardButton(text="🎁 Награда", callback_data="daily")],
-        [InlineKeyboardButton(text="⚒️ Крафт", callback_data="craft"), InlineKeyboardButton(text="🏆 Рейтинг", callback_data="rating")],
-        [InlineKeyboardButton(text="👥 Друзья", callback_data="friends"), InlineKeyboardButton(text="🎟 Мультипасс", callback_data="multipass")],
-        [InlineKeyboardButton(text="🎴 Мега-открытие", callback_data="mega_open"), InlineKeyboardButton(text="✏️ Ник", callback_data="nick_help")],
-        [InlineKeyboardButton(text="🎟 Промокод", callback_data="promo_help"), InlineKeyboardButton(text="📜 Правила", callback_data="rules")],
+        [InlineKeyboardButton(text="🎮 Режимы", callback_data="modes"), InlineKeyboardButton(text="🃏 Коллекция", callback_data="collection:page:0")],
+        [InlineKeyboardButton(text="📦 Магазин / награды", callback_data="shop"), InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
+        [InlineKeyboardButton(text="⚒️ Крафт", callback_data="craft"), InlineKeyboardButton(text="🎟 Мультипасс", callback_data="multipass")],
     ]
     if user_id and (is_owner(user_id) or is_right_hand(user_id)):
-        rows.insert(-1, [InlineKeyboardButton(text="🎁 Кейсы разработчика", callback_data="cases")])
+        rows.append([InlineKeyboardButton(text="🎁 Кейсы разработчика", callback_data="cases")])
+    rows.append([InlineKeyboardButton(text="📜 Правила", callback_data="rules")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def back_menu():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="menu")]])
+
+
+def profile_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="profile_stats"), InlineKeyboardButton(text="🏷 Знаки", callback_data="profile_badges")],
+        [InlineKeyboardButton(text="👥 Друзья", callback_data="friends"), InlineKeyboardButton(text="✏️ Ник", callback_data="nick_help")],
+        [InlineKeyboardButton(text="📜 Правила", callback_data="rules")],
+        [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
+    ])
+
+
+def shop_menu():
+    rows = [
+        [InlineKeyboardButton(text="🧰 Сундуки", callback_data="chests"), InlineKeyboardButton(text="🎴 Мега-открытие", callback_data="mega_open")],
+        [InlineKeyboardButton(text="🎁 Награда", callback_data="daily"), InlineKeyboardButton(text="🏆 Рейтинг", callback_data="rating")],
+        [InlineKeyboardButton(text="🎟 Промокод", callback_data="promo_help"), InlineKeyboardButton(text="🏷 Знаки", callback_data="badges_shop")],
+        [InlineKeyboardButton(text="🎟 Мультипасс", callback_data="multipass")],
+        [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def media_path(card_id):
@@ -520,6 +557,33 @@ def media_path(card_id):
 
 async def send_card_media(message, card_id):
     p = media_path(card_id)
+    if not p:
+        return False
+    f = FSInputFile(p)
+    ext = p.suffix.lower()
+    try:
+        if ext == ".gif":
+            await message.answer_animation(f)
+        elif ext == ".mp4":
+            await message.answer_video(f)
+        else:
+            await message.answer_photo(f)
+        return True
+    except Exception:
+        return False
+
+
+def arena_media_path(arena_code):
+    arena_dir = MEDIA_DIR / "arenas"
+    for ext in [".gif", ".mp4", ".jpg", ".jpeg", ".png", ".webp"]:
+        p = arena_dir / f"{arena_code}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+async def send_arena_media(message, arena_code):
+    p = arena_media_path(arena_code)
     if not p:
         return False
     f = FSInputFile(p)
@@ -675,7 +739,7 @@ def cancel_choice_timer(key):
 
 
 def option_roll_text():
-    return "⏱ На выбор даётся 15 секунд. Если не выбрать — бот выберет случайно."
+    return "⏱ На выбор даётся 20 секунд. На 10 и 5 секундах бот предупредит. Если не выбрать — бот выберет случайно."
 
 
 def strongest_unit(team):
@@ -760,6 +824,7 @@ def card_short(card, index=None):
         f"{rarity_label(card['rarity'])}\n"
         f"🌍 Аниме: {e(card['anime'])}\n"
         f"🎭 Мод: {e(card['form'])}\n"
+        f"📖 {e(card.get('description', ''))}\n"
         f"⚔️ Сила: <b>{card_power(card)}</b>\n"
         f"🎯 Роль: {e(card['role'])}\n"
         f"➕ {e(card['plus'])}\n"
@@ -777,6 +842,88 @@ def format_instance(inst, n):
         f"   ➖ {e(inst['debuff']['name'])}: {e(inst['debuff']['text'])}\n"
         f"   🗡 {e(inst['artifact']['name'])}: {e(inst['artifact']['text'])}"
     )
+
+
+def ordered_team(team, starter_idx=0):
+    if not team:
+        return []
+    starter_idx = max(0, min(int(starter_idx or 0), len(team) - 1))
+    return team[starter_idx:] + team[:starter_idx]
+
+
+def duel_score(inst):
+    return instance_score(inst) + random.randint(-28, 28)
+
+
+def duel_line(round_no, left_name, right_name, left_inst, right_inst, arena_code="ruins"):
+    left = CARD_BY_ID[left_inst["card_id"]]
+    right = CARD_BY_ID[right_inst["card_id"]]
+    ls = duel_score(left_inst)
+    rs = duel_score(right_inst)
+    arena_bonus = ARENA_EFFECTS.get(arena_code, ("", ""))[0]
+    if ls >= rs:
+        winner_name = left_name
+        winner_card = left
+        winner_inst = left_inst
+        result = 1
+    else:
+        winner_name = right_name
+        winner_card = right
+        winner_inst = right_inst
+        result = -1
+
+    actions = [
+        "врывается первым и ломает дистанцию",
+        "подсекает темп противника и забирает инициативу",
+        "ловит окно после ошибки врага",
+        "переживает стартовый удар и отвечает сильнее",
+        "использует арену как укрытие и выходит в контратаку",
+        "давит хаксом, скоростью и точным таймингом",
+    ]
+    text = (
+        f"🥊 <b>Раунд {round_no}</b>\n"
+        f"{e(left['name'])} vs {e(right['name'])}\n"
+        f"• {e(winner_card['name'])} {random.choice(actions)}.\n"
+        f"• Плюс победителя: {e(winner_card.get('plus', 'сильная техника'))}.\n"
+        f"• Цена/минус: {e(winner_card.get('minus', 'есть откат после атаки'))}.\n"
+        f"• Эффект: {e(winner_inst['debuff']['name'])} — {e(winner_inst['debuff']['text'])}.\n"
+        f"• Арена: {e(arena_bonus)}.\n"
+        f"✅ Очко забирает: <b>{e(winner_name)}</b>\n"
+    )
+    return result, text
+
+
+def resolve_step_battle(left_name, right_name, left_team, right_team, arena_code="ruins", left_starter=0, right_starter=0):
+    left_order = ordered_team(left_team, left_starter)
+    right_order = ordered_team(right_team, right_starter)
+    left_points = 0
+    right_points = 0
+    lines = []
+    rounds = min(len(left_order), len(right_order))
+    for i in range(rounds):
+        result, line = duel_line(i + 1, left_name, right_name, left_order[i], right_order[i], arena_code)
+        if result == 1:
+            left_points += 1
+        else:
+            right_points += 1
+        lines.append(line)
+
+    left_total = team_score(left_team) + random.randint(-25, 25)
+    right_total = team_score(right_team) + random.randint(-25, 25)
+
+    if left_points == right_points:
+        winner = left_name if left_total >= right_total else right_name
+        tie_text = f"⚖️ По очкам ничья. Решила общая сила команды: {left_total} vs {right_total}.\n"
+    else:
+        winner = left_name if left_points > right_points else right_name
+        tie_text = ""
+
+    summary = (
+        f"📊 <b>Счёт по раундам:</b> {e(left_name)} {left_points} : {right_points} {e(right_name)}\n"
+        f"{tie_text}"
+        f"🏆 <b>Победитель:</b> {e(winner)}"
+    )
+    return winner, left_points, right_points, "\n".join(lines), summary
 
 
 async def send_long(message, text, reply_markup=None):
@@ -937,7 +1084,6 @@ async def send_profile(message, user):
     p = get_user_data(user)
     total = sum(v.get("count", 0) for v in p["collection"].values())
     unique = len(p["collection"])
-    badges = visible_badges(p.get("badges", []))
     lvl, rem, nxt = calc_user_level(p.get("xp", 0))
     role = "👑 Владелец" if is_owner(user.id) else ("🤝 Правая рука" if is_right_hand(user.id) else "Игрок")
     await message.answer(
@@ -946,15 +1092,45 @@ async def send_profile(message, user):
         f"Роль: {role}\n"
         f"⭐ Уровень: <b>{lvl}</b> ({rem}/{nxt} XP)\n"
         f"💎 Фисташки: <b>{p['fistiks']}</b>\n"
-        f"⚔️ Боёв: {p['battles']}\n"
-        f"🏆 Побед: {p['wins']}\n"
-        f"💀 Поражений: {p['losses']}\n"
-        f"🃏 Карт всего: {total}\n"
-        f"📚 Уникальных карт: {unique}/{len(CARDS)}\n"
-        f"🏷 Знаки: {e(badges)}",
-        reply_markup=back_menu(),
+        f"🃏 Карт всего: <b>{total}</b>\n"
+        f"📚 Уникальных карт: <b>{unique}/{len(CARDS)}</b>\n\n"
+        "Ниже отдельные вкладки: статистика, знаки, друзья, ник и правила.",
+        reply_markup=profile_menu(),
         parse_mode="HTML"
     )
+
+
+async def send_profile_stats(message, user):
+    p = get_user_data(user)
+    lvl, rem, nxt = calc_user_level(p.get("xp", 0))
+    battles = int(p.get("battles", 0))
+    wins = int(p.get("wins", 0))
+    losses = int(p.get("losses", 0))
+    winrate = round((wins / battles) * 100, 1) if battles else 0
+    await message.answer(
+        "📊 <b>Статистика</b>\n\n"
+        f"⭐ Уровень: <b>{lvl}</b> ({rem}/{nxt} XP)\n"
+        f"💎 Фисташки: <b>{p.get('fistiks', 0)}</b>\n\n"
+        f"⚔️ Боёв: <b>{battles}</b>\n"
+        f"🏆 Побед: <b>{wins}</b>\n"
+        f"💀 Поражений: <b>{losses}</b>\n"
+        f"📈 Винрейт: <b>{winrate}%</b>",
+        reply_markup=profile_menu(),
+        parse_mode="HTML"
+    )
+
+
+async def send_profile_badges(message, user):
+    p = get_user_data(user)
+    badges = p.get("badges", [])
+    text = "🏷 <b>Знаки</b>\n\n"
+    if badges:
+        for b in badges:
+            text += f"• {e(badge_title(b))}\n"
+    else:
+        text += "Пока знаков нет. Их можно получить в магазине, ивентах или за особые действия."
+    await message.answer(text, reply_markup=profile_menu(), parse_mode="HTML")
+
 
 
 @dp.message(Command("profile"))
@@ -1012,6 +1188,18 @@ async def auto_upgrade_cb(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "profile")
 async def profile_cb(callback: types.CallbackQuery):
     await send_profile(callback.message, callback.from_user)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "profile_stats")
+async def profile_stats_cb(callback: types.CallbackQuery):
+    await send_profile_stats(callback.message, callback.from_user)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "profile_badges")
+async def profile_badges_cb(callback: types.CallbackQuery):
+    await send_profile_badges(callback.message, callback.from_user)
     await callback.answer()
 
 
@@ -1128,23 +1316,33 @@ def odds_text(weights):
 
 async def send_shop(message, user):
     p = get_user_data(user)
+    await message.answer(
+        f"📦 <b>Магазин / награды</b>\n\n"
+        f"Баланс: <b>{p['fistiks']}</b> 💎\n\n"
+        "Здесь лежит всё, что связано с покупками, сундуками, наградами, рейтингом и промокодами.",
+        reply_markup=shop_menu(),
+        parse_mode="HTML"
+    )
+
+
+async def send_chests(message, user):
+    p = get_user_data(user)
     rows = [
         [InlineKeyboardButton(text="🆓 Бесплатный сундук", callback_data="pack_info:free")],
         [InlineKeyboardButton(text="📦 Обычный сундук", callback_data="pack_info:basic")],
         [InlineKeyboardButton(text="💎 Усиленный сундук", callback_data="pack_info:rare")],
         [InlineKeyboardButton(text="👑 Королевский сундук", callback_data="pack_info:royal")],
-        [InlineKeyboardButton(text="🏷 Привилегии и знаки", callback_data="badges_shop")],
+        [InlineKeyboardButton(text="⬅️ Магазин / награды", callback_data="shop")],
     ]
-    if is_owner(user.id) or is_right_hand(user.id):
-        rows.append([InlineKeyboardButton(text="🎁 Кейсы разработчика", callback_data="cases")])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     await message.answer(
-        f"📦 <b>Магазин</b>\n\n"
+        f"🧰 <b>Сундуки</b>\n\n"
         f"Баланс: <b>{p['fistiks']}</b> 💎\n"
-        "Перед покупкой сундука нажми на него — там будут шансы и цена.",
+        "Перед покупкой сундука нажми на него — там будут шансы и цена.\n\n"
+        "🆓 Бесплатный сундук доступен раз в 3 часа.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         parse_mode="HTML"
     )
+
 
 
 @dp.message(Command("shop"))
@@ -1155,6 +1353,12 @@ async def shop_cmd(message: types.Message):
 @dp.callback_query(F.data == "shop")
 async def shop_cb(callback: types.CallbackQuery):
     await send_shop(callback.message, callback.from_user)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "chests")
+async def chests_cb(callback: types.CallbackQuery):
+    await send_chests(callback.message, callback.from_user)
     await callback.answer()
 
 
@@ -1170,7 +1374,7 @@ async def pack_info(callback: types.CallbackQuery):
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Открыть бесплатно", callback_data="buy_pack:free")],
-            [InlineKeyboardButton(text="⬅️ Магазин", callback_data="shop")]
+            [InlineKeyboardButton(text="⬅️ Сундуки", callback_data="chests")]
         ])
     else:
         pack = SHOP_PACKS[kind]
@@ -1185,7 +1389,7 @@ async def pack_info(callback: types.CallbackQuery):
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Купить", callback_data=f"buy_pack:{kind}")],
-            [InlineKeyboardButton(text="⬅️ Магазин", callback_data="shop")]
+            [InlineKeyboardButton(text="⬅️ Сундуки", callback_data="chests")]
         ])
     await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
@@ -1253,7 +1457,7 @@ async def badges_shop(callback: types.CallbackQuery):
         title = f"{item['emoji']} {item['title']}"
         text += f"<b>{title}</b> — {item['cost']} 💎\n{e(item['desc'])}\n\n"
         rows.append([InlineKeyboardButton(text=f"Купить: {title} — {item['cost']} 💎", callback_data=f"buy_badge:{db_code}:{item['cost']}")])
-    rows.append([InlineKeyboardButton(text="⬅️ Магазин", callback_data="shop")])
+    rows.append([InlineKeyboardButton(text="⬅️ Сундуки", callback_data="chests")])
     await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
     await callback.answer()
 @dp.callback_query(F.data.startswith("buy_badge:"))
@@ -1354,6 +1558,7 @@ async def card_detail(callback: types.CallbackQuery):
         f"⚔️ Сила: <b>{card_power(c, level)}</b>\n"
         f"🎭 Мод: {e(c['form'])}\n"
         f"🌍 Аниме: {e(c['anime'])}\n"
+        f"📖 Описание: {e(c.get('description', ''))}\n"
         f"📈 Уровень: <b>{level}/{MAX_LEVEL}</b>\n"
         f"🧩 Фрагменты: <b>{info.get('shards',0)}</b>\n"
         f"📌 {e(next_text)}\n\n"
@@ -1406,7 +1611,7 @@ async def show_arena_select(message, user):
         rows.append([InlineKeyboardButton(text=f"{emoji} {name}", callback_data=f"battle:arena:{code_key}")])
     rows.append([InlineKeyboardButton(text="🎲 Случайная арена", callback_data="battle:arena:random")])
     rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")])
-    await message.answer(text + "⏱ В каждом раунде выбора будет 15 секунд.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await message.answer(text + "⏱ В каждом раунде выбора будет 20 секунд.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
 
 async def start_battle_for(message, user, arena_code="random"):
@@ -1422,6 +1627,7 @@ async def start_battle_for(message, user, arena_code="random"):
         "chat_id": message.chat.id,
         "arena": arena_code,
     }
+    await send_arena_media(message, arena_code)
     await message.answer(
         f"⚔️ <b>Бой с ботом начался</b>\n\n"
         f"{emoji} Арена: <b>{e(arena_name)}</b>\n"
@@ -1488,7 +1694,7 @@ async def send_battle_round(message, uid):
         f"🎲 <b>Раунд {state['round']}/5</b>\n"
         f"{emoji} Арена: <b>{e(arena_name)}</b>\n"
         f"🃏 Играешь только картами из своей коллекции.\n"
-        f"⏱ 15 секунд на выбор.\n\n"
+        f"⏱ 20 секунд на выбор.\n\n"
     )
     for i, c in enumerate(options, 1):
         text += card_short(c, i) + "\n\n"
@@ -1507,10 +1713,32 @@ async def send_battle_round(message, uid):
 
 
 async def auto_pick_battle(uid, round_no):
-    await asyncio.sleep(CHOICE_TIMEOUT_SECONDS)
-    state = active_battles.get(uid)
-    if not state or state.get("done") or state.get("round") != round_no or not state.get("options"):
+    async def alive():
+        state = active_battles.get(uid)
+        return bool(state and not state.get("done") and state.get("round") == round_no and state.get("options"))
+
+    await asyncio.sleep(CHOICE_WARN_10_AFTER)
+    if not await alive():
         return
+    state = active_battles.get(uid)
+    try:
+        await bot.send_message(state.get("chat_id"), "⏳ Осталось 10 секунд. Выбери карту, иначе бот сделает ход за тебя.")
+    except Exception:
+        pass
+
+    await asyncio.sleep(CHOICE_WARN_5_AFTER - CHOICE_WARN_10_AFTER)
+    if not await alive():
+        return
+    state = active_battles.get(uid)
+    try:
+        await bot.send_message(state.get("chat_id"), "⚠️ Осталось 5 секунд. После таймера выбор будет случайным.")
+    except Exception:
+        pass
+
+    await asyncio.sleep(CHOICE_TIMEOUT_SECONDS - CHOICE_WARN_5_AFTER)
+    if not await alive():
+        return
+    state = active_battles.get(uid)
     idx = random.randrange(len(state["options"]))
     await process_battle_pick(uid, idx, auto=True)
 
@@ -1529,7 +1757,7 @@ async def process_battle_pick(uid, idx, auto=False, callback_message=None, user_
 
     player = DATA.get("users", {}).get(str(uid))
     if player is not None:
-        result = add_card(player, card["id"])
+        result = "карта вышла на поле из твоей коллекции"
         add_xp(player, 15)
         save_json(DATA_FILE, DATA)
     else:
@@ -1588,41 +1816,45 @@ async def pick_card(callback: types.CallbackQuery):
 
 async def finish_battle(message, user):
     state = active_battles[user.id]
-    text = "🏁 <b>Команды собраны</b>\n\n👤 <b>Твоя команда</b>\n"
+    text = "🏁 <b>Команда собрана</b>\n\n👤 <b>Твоя команда</b>\n"
     for i, inst in enumerate(state["player"], 1):
         text += format_instance(inst, i) + "\n"
-    text += "\n🤖 <b>Команда бота</b>\n"
-    for i, inst in enumerate(state["bot"], 1):
-        text += format_instance(inst, i) + "\n"
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚔️ Симулировать бой", callback_data="fight")],
-        [InlineKeyboardButton(text="🔁 Новый бой", callback_data="battle:start")],
-        [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")]
-    ])
-    await send_long(message, text, reply_markup=kb)
+    text += "\n🔒 <b>Команда бота скрыта.</b>\nОна раскроется только после начала боя.\n\n"
+    text += "Выбери первого персонажа, который выйдет вперёд."
+    rows = []
+    for i, inst in enumerate(state["player"], 1):
+        c = CARD_BY_ID[inst["card_id"]]
+        rows.append([InlineKeyboardButton(text=f"⚔️ Начать с {i}. {c['name'][:28]}", callback_data=f"fight_start:{i-1}")])
+    rows.append([InlineKeyboardButton(text="🔁 Новый бой", callback_data="battle:start")])
+    rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")])
+    await send_long(message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
-@dp.callback_query(F.data == "fight")
-async def fight(callback: types.CallbackQuery):
+async def resolve_solo_fight(callback: types.CallbackQuery, starter_idx=0):
     uid = callback.from_user.id
     if uid not in active_battles or not active_battles[uid].get("done"):
         await callback.answer("Сначала собери команду.", show_alert=True)
         return
     state = active_battles[uid]
-    pscore = team_score(state["player"])
-    bscore = team_score(state["bot"])
-    proll, broll = random.randint(-35, 35), random.randint(-35, 35)
-    pfinal, bfinal = pscore + proll, bscore + broll
+    if state.get("resolved"):
+        await callback.answer("Этот бой уже рассчитан.", show_alert=True)
+        return
+
     user_data = get_user_data(callback.from_user)
     player_name = user_data["name"]
+    arena_code = state.get("arena", "ruins")
+    emoji, arena_name, arena_desc = ARENAS.get(arena_code, ARENAS["ruins"])
+    bot_starter = random.randrange(len(state["bot"])) if state.get("bot") else 0
 
-    if pfinal >= bfinal:
-        winner = player_name
+    winner, ppoints, bpoints, rounds_text, summary = resolve_step_battle(
+        player_name, "Бот", state["player"], state["bot"], arena_code, starter_idx, bot_starter
+    )
+
+    if winner == player_name:
         user_data["wins"] += 1
         reward = 120
         xp = 90
     else:
-        winner = "Бот"
         user_data["losses"] += 1
         reward = 40
         xp = 45
@@ -1630,17 +1862,18 @@ async def fight(callback: types.CallbackQuery):
     if not is_owner(callback.from_user.id):
         user_data["fistiks"] += reward
     add_xp(user_data, xp)
+    state["resolved"] = True
     save_json(DATA_FILE, DATA)
 
-    arena_code = state.get("arena", "ruins")
-    emoji, arena_name, arena_desc = ARENAS.get(arena_code, ARENAS["ruins"])
-    story = battle_story(player_name, "Бот", state["player"], state["bot"], pscore, bscore, proll, broll, winner)
-
+    bot_team_text = "\n".join(format_instance(inst, i) for i, inst in enumerate(state["bot"], 1))
     text = (
-        f"⚔️ <b>Симуляция боя</b>\n\n"
+        f"⚔️ <b>Бой начался</b>\n\n"
         f"{emoji} <b>Арена:</b> {e(arena_name)}\n"
         f"— {e(arena_desc)}.\n\n"
-        f"{story}\n\n"
+        f"🤖 <b>Команда бота раскрыта</b>\n{bot_team_text}\n\n"
+        f"🎬 <b>Пошаговый бой</b>\n\n"
+        f"{rounds_text}\n\n"
+        f"{summary}\n\n"
         f"🎁 Награда: +{reward} 💎 и +{xp} XP"
     )
 
@@ -1649,8 +1882,22 @@ async def fight(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="🔁 Новый бой", callback_data="battle:start")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")]
     ])
-    await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await send_long(callback.message, text, reply_markup=kb)
     await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("fight_start:"))
+async def fight_start(callback: types.CallbackQuery):
+    try:
+        starter_idx = int(callback.data.split(":", 1)[1])
+    except Exception:
+        starter_idx = 0
+    await resolve_solo_fight(callback, starter_idx)
+
+
+@dp.callback_query(F.data == "fight")
+async def fight(callback: types.CallbackQuery):
+    await resolve_solo_fight(callback, 0)
 
 
 @dp.callback_query(F.data == "appeal")
@@ -1722,7 +1969,17 @@ async def promo_cmd(message: types.Message):
 
 @dp.callback_query(F.data == "promo_help")
 async def promo_help(callback: types.CallbackQuery):
-    await callback.message.answer("🎟 Введи промокод сообщением:\n<code>/promo START500</code>", parse_mode="HTML", reply_markup=back_menu())
+    await callback.message.answer(
+        "🎟 <b>Промокоды</b>\n\n"
+        "Вводи промокод сообщением:\n"
+        "<code>/promo START500</code>\n\n"
+        "<b>Примеры готовых кодов:</b>\n"
+        "• <code>START500</code> — 500 💎\n"
+        "• <code>PACKTEST</code> — 1500 💎\n"
+        "• <code>ITACHI</code> — карта/осколки Итачи",
+        parse_mode="HTML",
+        reply_markup=back_menu()
+    )
     await callback.answer()
 
 
@@ -1914,7 +2171,7 @@ async def send_pvp_round(bid):
         f"Раунд: <b>{state['round']}/5</b>\n"
         f"Сейчас выбирает: <b>{e(current_name)}</b>\n"
         f"Противник: <b>{e(enemy_name)}</b>\n"
-        f"⏱ 15 секунд на выбор. Если игрок молчит — карта выбирается случайно.\n\n"
+        f"⏱ 20 секунд на выбор. Если игрок молчит — карта выбирается случайно.\n\n"
         "Выбери 1 карту из доступных:\n\n"
     )
     for i, c in enumerate(options, 1):
@@ -1944,12 +2201,34 @@ async def send_pvp_round(bid):
 
 
 async def auto_pick_pvp(bid, round_no, turn_no):
-    await asyncio.sleep(CHOICE_TIMEOUT_SECONDS)
+    async def alive():
+        state = active_pvp.get(bid)
+        return bool(state and not state.get("done") and state.get("round") == round_no and state.get("turn") == turn_no and state.get("options"))
+
+    await asyncio.sleep(CHOICE_WARN_10_AFTER)
+    if not await alive():
+        return
     state = active_pvp.get(bid)
-    if not state or state.get("done") or state.get("round") != round_no or state.get("turn") != turn_no:
+    current_uid = state["players"][state["turn"]]
+    try:
+        await bot.send_message(int(current_uid), "⏳ Осталось 10 секунд. Выбери карту, иначе бот сделает скрытый выбор за тебя.")
+    except Exception:
+        pass
+
+    await asyncio.sleep(CHOICE_WARN_5_AFTER - CHOICE_WARN_10_AFTER)
+    if not await alive():
         return
-    if not state.get("options"):
+    state = active_pvp.get(bid)
+    current_uid = state["players"][state["turn"]]
+    try:
+        await bot.send_message(int(current_uid), "⚠️ Осталось 5 секунд. Дальше выбор будет случайным.")
+    except Exception:
+        pass
+
+    await asyncio.sleep(CHOICE_TIMEOUT_SECONDS - CHOICE_WARN_5_AFTER)
+    if not await alive():
         return
+    state = active_pvp.get(bid)
     idx = random.randrange(len(state["options"]))
     await process_pvp_pick(bid, idx, auto=True)
 
@@ -1970,7 +2249,7 @@ async def process_pvp_pick(bid, idx, auto=False, callback_message=None, from_use
 
     player = DATA.get("users", {}).get(str(current_uid))
     if player is not None:
-        result = add_card(player, card["id"])
+        result = "карта вышла на поле из твоей коллекции"
         add_xp(player, 20)
         save_json(DATA_FILE, DATA)
     else:
@@ -2014,22 +2293,20 @@ async def finish_pvp_draft(bid):
     if not state:
         return
     state["done"] = True
-
-    p1, p2 = state["players"]
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="⚔️ Симулировать PvP-бой", callback_data=f"pvp_sim:{bid}")],
-            [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")]
-        ]
-    )
+    state.setdefault("starters", {})
 
     for uid in state["players"]:
         try:
-            other = pvp_other_player(state, uid)
             text = "🏁 <b>PvP-драфт завершён</b>\n\n"
             text += pvp_team_text(f"👤 <b>Твоя команда</b>", state["teams"][uid])
-            text += "\n🔒 <b>Команда противника скрыта.</b>\nОна раскроется только в итоговом разборе боя."
-            await bot.send_message(int(uid), text, reply_markup=kb, parse_mode="HTML")
+            text += "\n🔒 <b>Команда противника скрыта.</b>\nОна раскроется только в итоговом пошаговом бою.\n\n"
+            text += "Выбери первого персонажа, который выйдет вперёд."
+            rows = []
+            for i, inst in enumerate(state["teams"][uid], 1):
+                c = CARD_BY_ID[inst["card_id"]]
+                rows.append([InlineKeyboardButton(text=f"⚔️ Начать с {i}. {c['name'][:28]}", callback_data=f"pvp_start:{bid}:{i-1}")])
+            rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")])
+            await bot.send_message(int(uid), text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
         except Exception:
             pass
 
@@ -2073,29 +2350,25 @@ async def pvp_pick(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(F.data.startswith("pvp_sim:"))
-async def pvp_sim(callback: types.CallbackQuery):
-    bid = callback.data.split(":", 1)[1]
+async def resolve_pvp_battle(bid):
     state = active_pvp.get(bid)
     if not state or not state.get("done"):
-        await callback.answer("PvP-бой ещё не готов.", show_alert=True)
         return
-
+    if state.get("resolved"):
+        return
     p1, p2 = state["players"]
-    s1 = team_score(state["teams"][p1])
-    s2 = team_score(state["teams"][p2])
-    r1 = random.randint(-40, 40)
-    r2 = random.randint(-40, 40)
-    f1 = s1 + r1
-    f2 = s2 + r2
+    starters = state.setdefault("starters", {})
+    if p1 not in starters or p2 not in starters:
+        return
 
     n1 = state["names"].get(p1, p1)
     n2 = state["names"].get(p2, p2)
+    arena_code = state.get("arena", "void")
+    winner_name, p1_points, p2_points, rounds_text, summary = resolve_step_battle(
+        n1, n2, state["teams"][p1], state["teams"][p2], arena_code, starters.get(p1, 0), starters.get(p2, 0)
+    )
 
-    if f1 >= f2:
-        winner_uid, loser_uid, winner_name = p1, p2, n1
-    else:
-        winner_uid, loser_uid, winner_name = p2, p1, n2
+    winner_uid, loser_uid = (p1, p2) if winner_name == n1 else (p2, p1)
 
     if not state.get("scored"):
         if winner_uid in DATA["users"]:
@@ -2111,20 +2384,73 @@ async def pvp_sim(callback: types.CallbackQuery):
         state["scored"] = True
         save_json(DATA_FILE, DATA)
 
-    story = battle_story(n1, n2, state["teams"][p1], state["teams"][p2], s1, s2, r1, r2, winner_name)
+    team1 = pvp_team_text(f"👤 <b>{e(n1)}</b>", state["teams"][p1])
+    team2 = pvp_team_text(f"👤 <b>{e(n2)}</b>", state["teams"][p2])
     text = (
-        "⚔️ <b>PvP-симуляция</b>\n\n"
-        "🔓 Команды раскрыты только после завершения драфта.\n\n"
-        f"{story}\n\n"
+        "⚔️ <b>PvP-бой начался</b>\n\n"
+        "🔓 Команды раскрыты только после выбора стартовых персонажей.\n\n"
+        f"{team1}\n{team2}\n"
+        f"🎬 <b>Пошаговый бой</b>\n\n"
+        f"{rounds_text}\n\n"
+        f"{summary}\n\n"
         "🎁 Победитель получает +160 💎 и +120 XP.\n"
         "🎁 Проигравший получает +60 💎 и +60 XP."
     )
 
+    state["resolved"] = True
     for uid in state["players"]:
         try:
             await bot.send_message(int(uid), text, reply_markup=back_menu(), parse_mode="HTML")
         except Exception:
             pass
+
+
+@dp.callback_query(F.data.startswith("pvp_start:"))
+async def pvp_start(callback: types.CallbackQuery):
+    try:
+        _, bid, idx_s = callback.data.split(":")
+        starter_idx = int(idx_s)
+    except Exception:
+        await callback.answer("Ошибка выбора стартового персонажа.", show_alert=True)
+        return
+
+    state = active_pvp.get(bid)
+    if not state or not state.get("done"):
+        await callback.answer("PvP-бой ещё не готов.", show_alert=True)
+        return
+
+    uid = str(callback.from_user.id)
+    if uid not in state["players"]:
+        await callback.answer("Ты не участник этого PvP.", show_alert=True)
+        return
+
+    state.setdefault("starters", {})[uid] = starter_idx
+    other = pvp_other_player(state, uid)
+    await callback.answer("Стартовый персонаж выбран.")
+
+    try:
+        await bot.send_message(int(uid), "✅ Стартовый персонаж выбран. Если противник уже готов — бой начнётся.")
+    except Exception:
+        pass
+    if other not in state["starters"]:
+        try:
+            await bot.send_message(int(other), f"📌 {e(state['names'].get(uid, uid))} выбрал стартового персонажа. Твой выбор всё ещё нужен.")
+        except Exception:
+            pass
+
+    await resolve_pvp_battle(bid)
+
+
+@dp.callback_query(F.data.startswith("pvp_sim:"))
+async def pvp_sim(callback: types.CallbackQuery):
+    bid = callback.data.split(":", 1)[1]
+    state = active_pvp.get(bid)
+    if not state or not state.get("done"):
+        await callback.answer("PvP-бой ещё не готов.", show_alert=True)
+        return
+    for uid in state["players"]:
+        state.setdefault("starters", {}).setdefault(uid, 0)
+    await resolve_pvp_battle(bid)
     await callback.answer("PvP-бой рассчитан.")
 
 
@@ -2156,6 +2482,8 @@ async def challenge_accept(callback: types.CallbackQuery):
         "options": [],
         "done": False,
         "scored": False,
+        "starters": {},
+        "resolved": False,
     }
 
     await callback.message.answer("✅ Вызов принят. PvP-драфт запущен.", reply_markup=back_menu())
@@ -2411,27 +2739,93 @@ async def case_open(callback: types.CallbackQuery):
 
 
 
+PASS_FREE_REWARDS = {
+    1: {"fistiks": 100},
+    3: {"fistiks": 250},
+    5: {"pack": "basic"},
+    8: {"fistiks": 500},
+    10: {"fragments": 50},
+    15: {"pack": "rare"},
+    20: {"fistiks": 1200},
+}
+
+PASS_PREMIUM_REWARDS = {
+    1: {"badge": "PREMIUM"},
+    3: {"fistiks": 700},
+    5: {"pack": "rare"},
+    10: {"fragments": 250},
+    15: {"pack": "royal"},
+    20: {"fistiks": 3000},
+}
+
+
+def pass_level_from_xp(xp):
+    return max(1, int(xp or 0) // 250 + 1)
+
+
+def format_pass_rewards(rewards, claimed):
+    lines = []
+    for lvl, reward in rewards.items():
+        mark = "✅" if str(lvl) in claimed else "🎁"
+        parts = []
+        if "fistiks" in reward:
+            parts.append(f"{reward['fistiks']} 💎")
+        if "pack" in reward:
+            parts.append(SHOP_PACKS.get(reward["pack"], {}).get("name", reward["pack"]))
+        if "fragments" in reward:
+            parts.append(f"{reward['fragments']} фрагментов")
+        if "badge" in reward:
+            parts.append(f"знак {badge_title(reward['badge'])}")
+        lines.append(f"{mark} {lvl} ур. — " + ", ".join(parts))
+    return "\n".join(lines)
+
+
+def grant_pass_reward(player, reward):
+    text = []
+    if "fistiks" in reward:
+        player["fistiks"] = player.get("fistiks", 0) + int(reward["fistiks"])
+        text.append(f"+{reward['fistiks']} 💎")
+    if "badge" in reward:
+        player.setdefault("badges", [])
+        if reward["badge"] not in player["badges"]:
+            player["badges"].append(reward["badge"])
+        text.append(f"знак {badge_title(reward['badge'])}")
+    if "fragments" in reward:
+        amount = int(reward["fragments"])
+        card = roll_card(weights={"Обычный": 500, "Редкий": 300, "Эпический": 160, "Мифический": 35, "Легендарный": 5})
+        text.append(add_fragments(player, card["id"], amount))
+    if "pack" in reward:
+        pack = SHOP_PACKS.get(reward["pack"])
+        if pack:
+            pulled = set()
+            for _ in range(pack["count"]):
+                card = roll_card(weights=pack["weights"], exclude=pulled)
+                pulled.add(card["id"])
+                text.append(add_card(player, card["id"]))
+    return "\n".join(text) if text else "Награда выдана."
+
+
 async def send_multipass(message, user):
     p = get_user_data(user)
-    pass_level = max(1, int(p.get("pass_xp", 0)) // 250 + 1)
+    pass_level = pass_level_from_xp(p.get("pass_xp", 0))
     premium = "активен" if p.get("pass_premium") else "не куплен"
+    free_claimed = set(map(str, p.get("claimed_pass_free", [])))
+    premium_claimed = set(map(str, p.get("claimed_pass_premium", [])))
     text = (
         "🎟 <b>Мультипасс</b>\n\n"
         f"⭐ Уровень пропуска: <b>{pass_level}</b>\n"
         f"📌 Очки пропуска: <b>{p.get('pass_xp', 0)}</b>\n"
         f"👑 Премиум: <b>{premium}</b>\n\n"
         "🎁 <b>Бесплатная линия</b>\n"
-        "• каждые 5 уровней — сундук\n"
-        "• каждые 10 уровней — фрагменты\n\n"
+        f"{format_pass_rewards(PASS_FREE_REWARDS, free_claimed)}\n\n"
         "👑 <b>Премиум-линия</b>\n"
-        "• больше сундуков\n"
-        "• больше фрагментов\n"
-        "• редкие знаки сезона\n\n"
-        "Сезон обновляется раз в месяц. Полная выдача наград будет в следующем слое."
+        f"{format_pass_rewards(PASS_PREMIUM_REWARDS, premium_claimed)}\n\n"
+        f"⭐ Премиум покупается за Telegram Stars: <b>{PASS_PRICE_STARS}</b> ⭐"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Бесплатная линия", callback_data="multipass_free")],
-        [InlineKeyboardButton(text="👑 Премиум-линия", callback_data="multipass_premium")],
+        [InlineKeyboardButton(text="🎁 Забрать бесплатные награды", callback_data="pass_claim:free")],
+        [InlineKeyboardButton(text="👑 Забрать премиум-награды", callback_data="pass_claim:premium")],
+        [InlineKeyboardButton(text=f"⭐ Купить премиум за {PASS_PRICE_STARS} Stars", callback_data="buy_pass_stars")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
     ])
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -2448,33 +2842,87 @@ async def multipass_cmd(message: types.Message):
     await send_multipass(message, message.from_user)
 
 
-@dp.callback_query(F.data.in_({"multipass_free", "multipass_premium"}))
-async def multipass_line(callback: types.CallbackQuery):
-    if callback.data == "multipass_free":
-        text = "🎁 <b>Бесплатная линия</b>\n\n1 ур. — 100 💎 фисташек\n5 ур. — обычный сундук\n10 ур. — 50 фрагментов\n15 ур. — усиленный сундук\n\nЗабор наград добавим следующим слоем."
-    else:
-        text = "👑 <b>Премиум-линия</b>\n\n1 ур. — знак сезона\n5 ур. — усиленный сундук\n10 ур. — 250 фрагментов\n20 ур. — королевский сундук\n\nПокупку премиума добавим позже."
-    await callback.message.answer(text, reply_markup=back_menu(), parse_mode="HTML")
+@dp.callback_query(F.data.startswith("pass_claim:"))
+async def pass_claim(callback: types.CallbackQuery):
+    line = callback.data.split(":", 1)[1]
+    p = get_user_data(callback.from_user)
+    current_level = pass_level_from_xp(p.get("pass_xp", 0))
+    if line == "premium" and not (p.get("pass_premium") or is_owner(callback.from_user.id)):
+        await callback.answer("Премиум-линия не куплена.", show_alert=True)
+        return
+
+    rewards = PASS_FREE_REWARDS if line == "free" else PASS_PREMIUM_REWARDS
+    key = "claimed_pass_free" if line == "free" else "claimed_pass_premium"
+    claimed = set(map(str, p.setdefault(key, [])))
+    granted = []
+    for lvl, reward in rewards.items():
+        if lvl <= current_level and str(lvl) not in claimed:
+            granted.append(f"<b>{lvl} ур.</b>: {e(grant_pass_reward(p, reward))}")
+            p[key].append(str(lvl))
+
+    if not granted:
+        await callback.answer("Нет доступных наград для забора.", show_alert=True)
+        return
+
+    save_json(DATA_FILE, DATA)
+    await callback.message.answer("🎁 <b>Награды мультипасса получены</b>\n\n" + "\n".join(granted), reply_markup=back_menu(), parse_mode="HTML")
     await callback.answer()
+
+
+@dp.callback_query(F.data == "buy_pass_stars")
+async def buy_pass_stars(callback: types.CallbackQuery):
+    p = get_user_data(callback.from_user)
+    if p.get("pass_premium") and not is_owner(callback.from_user.id):
+        await callback.answer("Премиум уже активен.", show_alert=True)
+        return
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title="Премиум мультипасс",
+        description="Открывает премиум-линию наград мультипасса.",
+        payload=f"multipass_premium:{callback.from_user.id}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label="Премиум мультипасс", amount=PASS_PRICE_STARS)],
+    )
+    await callback.answer()
+
+
+@dp.pre_checkout_query()
+async def pre_checkout_query(pre_checkout: types.PreCheckoutQuery):
+    await pre_checkout.answer(ok=True)
+
+
+@dp.message(F.successful_payment)
+async def successful_payment(message: types.Message):
+    payload = message.successful_payment.invoice_payload
+    if payload.startswith("multipass_premium:"):
+        p = get_user_data(message.from_user)
+        p["pass_premium"] = True
+        p["stars_earned"] = int(p.get("stars_earned", 0)) + int(message.successful_payment.total_amount)
+        save_json(DATA_FILE, DATA)
+        await message.answer("👑 Премиум мультипасс активирован. Открой /pass и забери премиум-награды.", reply_markup=back_menu())
+    else:
+        await message.answer("✅ Платёж получен.")
+
+
 
 
 async def send_modes(message, user):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🌌 Арена с ботом", callback_data="battle:start")],
+        [InlineKeyboardButton(text="🌌 Арена мультивселенной", callback_data="battle:start")],
         [InlineKeyboardButton(text="🌐 Онлайн-бой", callback_data="online_search")],
-        [InlineKeyboardButton(text="👥 Друзья", callback_data="friends")],
-        [InlineKeyboardButton(text="🎴 Мега-открытие", callback_data="mega_open")],
+        [InlineKeyboardButton(text="🧬 Колода", callback_data="deck")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
     ])
     await message.answer(
         "🎮 <b>Режимы</b>\n\n"
-        "🌌 <b>Арена с ботом</b> — быстрый бой против ИИ.\n"
-        "🌐 <b>Онлайн-бой</b> — поиск живого игрока.\n"
-        "👥 <b>Друзья</b> — вызов конкретного друга.\n"
-        "🎴 <b>Мега-открытие</b> — быстро открыть несколько сундуков.",
+        "🌌 <b>Арена мультивселенной</b> — бой против ИИ на выбранной арене.\n"
+        "🌐 <b>Онлайн-бой</b> — скрытый PvP против живого игрока.\n"
+        "🧬 <b>Колода</b> — сила твоей коллекции и автоулучшение.",
         reply_markup=kb,
         parse_mode="HTML"
     )
+
 
 
 @dp.callback_query(F.data == "modes")
@@ -2598,6 +3046,8 @@ async def join_online_queue(user):
             "options": [],
             "done": False,
             "scored": False,
+            "starters": {},
+            "resolved": False,
         }
         return bid
     online_queue.append(uid)
@@ -2646,31 +3096,42 @@ async def unknown(message: types.Message):
 
 
 async def free_pack_notifier():
-    await asyncio.sleep(10)
+    # Каждые 3 часа напоминает всем зарегистрированным пользователям, что бесплатный сундук доступен.
+    await asyncio.sleep(30)
     while True:
         try:
             now = datetime.now()
+            changed = False
             for uid, player in list(DATA.get("users", {}).items()):
-                last = player.get("last_free_pack", "")
-                if not last:
-                    continue
-                if player.get("free_pack_notified", False):
-                    continue
-                try:
-                    last_dt = datetime.fromisoformat(last)
-                except Exception:
-                    continue
-                if now >= last_dt + timedelta(hours=3):
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🆓 Забрать бесплатный сундук", callback_data="pack_info:free")]])
+                last_notice = player.get("last_free_notice", "")
+                can_send = True
+                if last_notice:
                     try:
-                        await bot.send_message(int(uid), "🎁 Бесплатный сундук снова доступен!", reply_markup=kb)
-                        player["free_pack_notified"] = True
-                        save_json(DATA_FILE, DATA)
+                        can_send = now >= datetime.fromisoformat(last_notice) + timedelta(hours=3)
                     except Exception:
-                        pass
+                        can_send = True
+                if not can_send:
+                    continue
+
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🆓 Забрать бесплатный сундук", callback_data="pack_info:free")]
+                ])
+                try:
+                    await bot.send_message(
+                        int(uid),
+                        "🎁 Время получать карту: бесплатный сундук снова доступен. Забери его в магазине.",
+                        reply_markup=kb
+                    )
+                    player["last_free_notice"] = now.isoformat()
+                    player["free_pack_notified"] = True
+                    changed = True
+                except Exception:
+                    pass
+            if changed:
+                save_json(DATA_FILE, DATA)
         except Exception:
             pass
-        await asyncio.sleep(60)
+        await asyncio.sleep(3 * 60 * 60)
 
 
 async def health_handler(request):
