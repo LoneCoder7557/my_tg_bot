@@ -25,8 +25,8 @@ MAX_LEVEL = 100
 CARD_UNLOCK_FRAGMENTS = 100
 FRIEND_ID_DEFAULT = "527802531"
 CHOICE_TIMEOUT_SECONDS = 20
-CHOICE_WARN_10_AFTER = max(0, CHOICE_TIMEOUT_SECONDS - 10)
-CHOICE_WARN_5_AFTER = max(0, CHOICE_TIMEOUT_SECONDS - 5)
+CHOICE_WARN_10_AFTER = 10
+CHOICE_WARN_5_AFTER = 15
 PASS_PRICE_STARS = 199
 
 ARENAS = {
@@ -192,6 +192,9 @@ BADGE_SHOP = {
 
 BADGE_TITLES = {
     "DEV": "👑 Создатель",
+    "ROMA_OWNER": "💠 Рома | Владелец мультивселенной",
+    "IT_ARCHITECT": "🧠 IT-Создатель",
+    "ABSOLUTE_MAX": "♾ Абсолютный максимум",
     "RIGHT_HAND": "🤝 Правая рука",
     "KILLER": "🗡 Убийца",
     "EVENT_HUNTER": "⚡ Охотник ивентов",
@@ -474,6 +477,10 @@ def get_user_data(user):
             "pass_task_progress": {},
             "pass_task_claimed": [],
             "pass_purchase_request": "",
+            "created_at": datetime.now().isoformat(),
+            "newbie_claimed": [],
+            "newbie_progress": {},
+            "pvp_team_source": "deck",
         }
         # Стартовая коллекция: чтобы новичок мог сразу войти в арену своими картами.
         starter_ids = ["levi_peak", "mikasa", "kirito_alicization", "gon_base", "tanjiro_sun"]
@@ -486,7 +493,7 @@ def get_user_data(user):
     for k, v in {
         "xp": 0, "badges": [], "premium": False, "used_promos": [], "last_daily": "",
         "last_free_pack": "", "free_pack_notified": False, "last_free_notice": "", "ref_by": "", "ref_count": 0,
-        "wins": 0, "losses": 0, "battles": 0, "last_seen": "", "ref_earned": 0, "nickname": "", "pass_xp": 0, "pass_premium": False, "claimed_pass_free": [], "claimed_pass_premium": [], "stars_earned": 0, "deck": [], "auto_team": True, "pass_daily_date": "", "pass_task_progress": {}, "pass_task_claimed": [], "pass_purchase_request": "",
+        "wins": 0, "losses": 0, "battles": 0, "last_seen": "", "ref_earned": 0, "nickname": "", "pass_xp": 0, "pass_premium": False, "claimed_pass_free": [], "claimed_pass_premium": [], "stars_earned": 0, "deck": [], "auto_team": True, "pass_daily_date": "", "pass_task_progress": {}, "pass_task_claimed": [], "pass_purchase_request": "", "created_at": datetime.now().isoformat(), "newbie_claimed": [], "newbie_progress": {}, "pvp_team_source": "deck",
     }.items():
         player.setdefault(k, v)
     if player.get("nickname"):
@@ -497,17 +504,19 @@ def get_user_data(user):
     normalize_collection(player)
 
     if is_owner(user.id):
-        player["name"] = "LoneCoder"
+        # Владелец: ник не трогаем, но выдаём абсолютный максимум и отдельные знаки.
         player["fistiks"] = 999999999
-        player["wins"] = max(player.get("wins", 0), 1000)
+        player["wins"] = max(player.get("wins", 0), 9999)
         player["losses"] = 0
-        player["battles"] = max(player.get("battles", 0), 1000)
-        player["xp"] = max(player.get("xp", 0), 999999)
+        player["battles"] = max(player.get("battles", 0), 9999)
+        player["xp"] = max(player.get("xp", 0), 99999999)
         player["premium"] = True
         player["pass_premium"] = True
-        player["pass_xp"] = max(int(player.get("pass_xp", 0)), 25000)
-        if "DEV" not in player["badges"]:
-            player["badges"].append("DEV")
+        player["pass_xp"] = max(int(player.get("pass_xp", 0)), 999999)
+        player["creator_aura"] = "💠 Рома | Владелец мультивселенной"
+        for badge in ["DEV", "ROMA_OWNER", "IT_ARCHITECT", "ABSOLUTE_MAX"]:
+            if badge not in player["badges"]:
+                player["badges"].append(badge)
         for cid in CARD_BY_ID:
             # У владельца должна быть одна чистая копия каждой карты, без визуальных дублей.
             player["collection"][cid] = {"count": 1, "shards": 999999, "level": MAX_LEVEL, "unlocked": True}
@@ -528,6 +537,8 @@ def main_menu(user_id=None):
         [InlineKeyboardButton(text="📦 Магазин / награды", callback_data="shop"), InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
         [InlineKeyboardButton(text="⚒️ Крафт", callback_data="craft"), InlineKeyboardButton(text="🎟 Мультипасс", callback_data="multipass")],
     ]
+    if user_id and is_newbie_active(user_id):
+        rows.append([InlineKeyboardButton(text="🚀 Старт новичка", callback_data="newbie_start")])
     if user_id and (is_owner(user_id) or is_right_hand(user_id)):
         rows.append([InlineKeyboardButton(text="🎁 Кейсы разработчика", callback_data="cases")])
     rows.append([InlineKeyboardButton(text="📜 Правила", callback_data="rules")])
@@ -1158,11 +1169,12 @@ async def send_profile(message, user):
     total = sum(v.get("count", 0) for v in p["collection"].values())
     unique = len(p["collection"])
     lvl, rem, nxt = calc_user_level(p.get("xp", 0))
-    role = "👑 Владелец" if is_owner(user.id) else ("🤝 Правая рука" if is_right_hand(user.id) else "Игрок")
+    role = "💠 Рома | Владелец мультивселенной" if is_owner(user.id) else ("🤝 Правая рука" if is_right_hand(user.id) else "Игрок")
+    aura = f"\nЗнак: <b>{e(p.get('creator_aura', ''))}</b>" if is_owner(user.id) else ""
     await message.answer(
         f"👤 <b>Профиль</b>\n\n"
         f"Имя: <b>{e(p['name'])}</b>\n"
-        f"Роль: {role}\n"
+        f"Роль: {role}{aura}\n"
         f"⭐ Уровень: <b>{lvl}</b> ({rem}/{nxt} XP)\n"
         f"💎 Фисташки: <b>{p['fistiks']}</b>\n"
         f"🃏 Карт всего: <b>{total}</b>\n"
@@ -1314,6 +1326,38 @@ async def profile_badges_cb(callback: types.CallbackQuery):
 
 
 async def send_rules(message):
+    full_names = {
+        "Наруто": "Naruto / Naruto Shippuden / Boruto: Naruto Next Generations",
+        "Боруто": "Boruto: Naruto Next Generations",
+        "Блич": "Bleach / Bleach: Thousand-Year Blood War",
+        "Ван-Пис": "One Piece",
+        "Драгонболл": "Dragon Ball / Dragon Ball Z / Dragon Ball Super",
+        "Dragon Ball Heroes": "Super Dragon Ball Heroes",
+        "Драгонболл: фильм": "Dragon Ball Super: Broly / Super Hero",
+        "Ванпанчмен": "One Punch Man",
+        "Моя геройская академия": "My Hero Academia",
+        "Магическая битва": "Jujutsu Kaisen",
+        "Чёрный клевер": "Black Clover",
+        "Хвост Феи": "Fairy Tail",
+        "Magi": "Magi: The Labyrinth of Magic",
+        "Макс-целитель": "Redo of Healer / Маг-целитель: новый старт",
+        "Клинок, рассекающий демонов": "Demon Slayer: Kimetsu no Yaiba",
+        "Берсерк": "Berserk",
+        "Поднятие уровня в одиночку": "Solo Leveling",
+        "Goblin Slayer": "Goblin Slayer",
+        "Семь смертных грехов": "The Seven Deadly Sins",
+        "Hunter x Hunter": "Hunter x Hunter",
+        "JoJo": "JoJo’s Bizarre Adventure",
+        "Покемон": "Pokémon",
+        "Sword Art Online": "Sword Art Online",
+        "Доктор Стоун": "Dr. Stone",
+        "Baki": "Baki / Baki Hanma",
+        "Гуррен-Лаганн": "Tengen Toppa Gurren Lagann",
+        "Umineko": "Umineko When They Cry",
+        "Tenchi Muyo": "Tenchi Muyo!",
+        "Непризнанный школой владыка демонов": "The Misfit of Demon King Academy",
+        "О моём перерождении в слизь": "That Time I Got Reincarnated as a Slime",
+    }
     groups = [
         ("🥷 Шиноби и Оцуцуки", ["Наруто", "Боруто"]),
         ("⚔️ Блич", ["Блич"]),
@@ -1334,37 +1378,39 @@ async def send_rules(message):
         existing = []
         for n in names:
             if n in existing_anime and n not in used:
-                existing.append(n)
+                existing.append(full_names.get(n, n))
                 used.add(n)
         if existing:
             anime_text += f"\n<b>{title}</b>\n" + "\n".join(f"• {e(n)}" for n in existing) + "\n"
 
     other = sorted(existing_anime - used)
     if other:
-        anime_text += "\n<b>✨ Дополнительные вселенные</b>\n" + "\n".join(f"• {e(n)}" for n in other) + "\n"
+        anime_text += "\n<b>✨ Дополнительные вселенные</b>\n" + "\n".join(f"• {e(full_names.get(n, n))}" for n in other) + "\n"
 
     await message.answer(
         "📜 <b>Правила игры</b>\n\n"
         "⚔️ <b>Арена с ботом</b>\n"
-        "• Бот выдаёт 5 вариантов.\n"
-        "• Ты выбираешь 1 карту.\n"
-        "• Так собирается команда из 5 бойцов.\n"
-        "• У каждой карты есть форма, плюс, минус, сила и случайный боевой модификатор.\n\n"
-        "👥 <b>PvP с другом</b>\n"
-        "• Добавь друга через /addfriend ID.\n"
-        "• Вызови его в разделе «Друзья».\n"
-        "• После принятия вы по очереди выбираете карты.\n"
-        "• Потом бот сравнивает команды и показывает итог боя.\n\n"
+        "• Ты выбираешь арену и сложность ИИ от 1 до 10.\n"
+        "• Бой идёт твоей колодой из 5 открытых карт.\n"
+        "• Сначала выбираешь стартового бойца, потом каждый следующий раунд отдельно.\n"
+        "• Если игрок не выбирает вовремя — бот делает случайный ход за него.\n\n"
+        "👥 <b>PvP / бой с другом</b>\n"
+        "• Каждый игрок отдельно выбирает, как формировать команду: своей колодой, рандомом от бота или ручным скрытым драфтом.\n"
+        "• Команды противников скрыты до начала боя.\n"
+        "• Раунды идут по одному, очки считаются отдельно.\n\n"
+        "🚀 <b>Старт новичка</b>\n"
+        "• Первые 3 дня открыт отдельный раздел с лёгкими заданиями.\n"
+        "• Он нужен, чтобы новичок быстро встал на ноги и понял бота.\n\n"
         "🃏 <b>Коллекция</b>\n"
         "• Карты остаются в коллекции.\n"
         "• Дубликаты превращаются в фрагменты.\n"
         "• Фрагментами можно улучшать карту до 100 уровня.\n\n"
         "🎲 <b>Вес редкости в обычной системе</b>\n"
-        "⚪ Обычный — 700\n"
-        "🔵 Редкий — 200\n"
-        "🟣 Эпический — 80\n"
-        "🟡 Легендарный — 20\n"
-        "🔴 Мифический — 10\n\n"
+        "⚪ Обычный — 850\n"
+        "🔵 Редкий — 120\n"
+        "🟣 Эпический — 25\n"
+        "🟡 Легендарный — 4\n"
+        "🔴 Мифический — 1\n\n"
         "🌍 <b>Вселенные в базе</b>\n"
         f"{anime_text}",
         reply_markup=back_menu(),
@@ -1392,6 +1438,7 @@ async def send_daily(message, user):
     p["fistiks"] += 250
     add_xp(p, 35)
     add_pass_task_progress(p, "daily", 1)
+    add_newbie_task_progress(p, "daily", 1)
     save_json(DATA_FILE, DATA)
     await message.answer("🎁 Ежедневная награда получена: +250 💎 фисташек и +35 XP.", reply_markup=back_menu())
 
@@ -1555,6 +1602,9 @@ async def buy_pack(callback: types.CallbackQuery):
         got.append((card, result))
     add_xp(p, xp)
     add_pass_task_progress(p, "chest", 1)
+    add_newbie_task_progress(p, "chest", 1)
+    if kind == "free":
+        add_newbie_task_progress(p, "free_pack", 1)
     save_json(DATA_FILE, DATA)
     await send_pack_result(callback.message, name, got, p)
     await callback.answer()
@@ -1881,7 +1931,7 @@ async def auto_pick_battle(uid, round_no):
         state = active_battles.get(uid)
         return bool(state and not state.get("done") and state.get("round") == round_no and state.get("options"))
 
-    await asyncio.sleep(CHOICE_WARN_10_AFTER)
+    await asyncio.sleep(10)
     if not await alive():
         return
     state = active_battles.get(uid)
@@ -1890,7 +1940,7 @@ async def auto_pick_battle(uid, round_no):
     except Exception:
         pass
 
-    await asyncio.sleep(CHOICE_WARN_5_AFTER - CHOICE_WARN_10_AFTER)
+    await asyncio.sleep(5)
     if not await alive():
         return
     state = active_battles.get(uid)
@@ -1899,7 +1949,7 @@ async def auto_pick_battle(uid, round_no):
     except Exception:
         pass
 
-    await asyncio.sleep(CHOICE_TIMEOUT_SECONDS - CHOICE_WARN_5_AFTER)
+    await asyncio.sleep(5)
     if not await alive():
         return
     state = active_battles.get(uid)
@@ -2077,10 +2127,13 @@ async def process_solo_fight_round(message, user, player_idx):
         c = CARD_BY_ID[state["player"][idx]["card_id"]]
         rows.append([InlineKeyboardButton(text=f"➡️ Раунд {round_no + 1}: {c['name'][:30]}", callback_data=f"fight_next:{idx}")])
     await message.answer(
-        text + "\n\nВыбери бойца на следующий раунд.",
+        text + "\n\nВыбери бойца на следующий раунд. На выбор 20 секунд.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         parse_mode="HTML"
     )
+    key = ("solo_next", uid, round_no + 1)
+    cancel_choice_timer(key)
+    choice_timers[key] = asyncio.create_task(auto_next_solo(uid, round_no + 1))
 
 
 async def finish_solo_interactive(message, user):
@@ -2114,6 +2167,7 @@ async def finish_solo_interactive(message, user):
         xp = 45
     user_data["battles"] += 1
     add_pass_task_progress(user_data, "battle", 1)
+    add_newbie_task_progress(user_data, "battle", 1)
 
     if not is_owner(uid):
         user_data["fistiks"] += reward
@@ -2143,6 +2197,49 @@ async def finish_solo_interactive(message, user):
     await send_long(message, text, reply_markup=kb)
 
 
+async def auto_next_solo(uid, expected_round):
+    async def alive():
+        state = active_battles.get(uid)
+        return bool(state and not state.get("resolved") and int(state.get("fight_round", 0)) + 1 == expected_round and state.get("remaining_player_indices"))
+
+    await asyncio.sleep(10)
+    if not await alive():
+        return
+    state = active_battles.get(uid)
+    try:
+        await bot.send_message(state.get("chat_id"), "⏳ Осталось 10 секунд. Выбери бойца на раунд, иначе бот выберет за тебя.")
+    except Exception:
+        pass
+    await asyncio.sleep(5)
+    if not await alive():
+        return
+    state = active_battles.get(uid)
+    try:
+        await bot.send_message(state.get("chat_id"), "⚠️ Осталось 5 секунд. Сейчас выбор станет случайным.")
+    except Exception:
+        pass
+    await asyncio.sleep(5)
+    if not await alive():
+        return
+    state = active_battles.get(uid)
+    idx = random.choice(state.get("remaining_player_indices", [0]))
+    chat_id = state.get("chat_id")
+    class MessageProxy:
+        chat = type("Chat", (), {"id": chat_id})()
+        async def answer(self, text, **kwargs):
+            return await bot.send_message(chat_id, text, **kwargs)
+        async def edit_reply_markup(self, **kwargs):
+            return None
+    class UserProxy:
+        id = uid
+        full_name = DATA.get("users", {}).get(str(uid), {}).get("name", str(uid))
+    try:
+        await bot.send_message(chat_id, "⏱ Время вышло. Бот выбрал бойца за тебя.")
+    except Exception:
+        pass
+    await process_solo_fight_round(MessageProxy(), UserProxy(), idx)
+
+
 @dp.callback_query(F.data.startswith("fight_next:"))
 async def fight_next(callback: types.CallbackQuery):
     try:
@@ -2154,6 +2251,11 @@ async def fight_next(callback: types.CallbackQuery):
     if not state or idx not in state.get("remaining_player_indices", []):
         await callback.answer("Этот боец уже недоступен.", show_alert=True)
         return
+    cancel_choice_timer(("solo_next", callback.from_user.id, int(state.get("fight_round", 0)) + 1))
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await process_solo_fight_round(callback.message, callback.from_user, idx)
     await callback.answer()
 
@@ -2407,9 +2509,53 @@ def pvp_team_text(title, team):
     return text
 
 
+
+
+def pvp_team_source(uid):
+    player = DATA.get("users", {}).get(str(uid), {})
+    return player.get("pvp_team_source", "deck")
+
+
+def auto_fill_pvp_team_if_needed(state, uid):
+    uid = str(uid)
+    team = state["teams"].setdefault(uid, [])
+    if len(team) >= 5:
+        return True
+    source = pvp_team_source(uid)
+    if source == "deck":
+        built = build_player_team_from_deck(uid)
+        if len(built) >= 5:
+            state["teams"][uid] = built[:5]
+            return True
+    if source == "random_bot":
+        state["teams"][uid] = build_bot_team(5)[:5]
+        return True
+    return False
+
+
+def advance_pvp_turn(state):
+    advance_pvp_turn(state)
+
+
 async def send_pvp_round(bid):
     state = active_pvp.get(bid)
     if not state or state.get("done"):
+        return
+
+    safety = 0
+    while state and not state.get("done") and safety < 10:
+        safety += 1
+        if len(state["teams"][state["players"][0]]) >= 5 and len(state["teams"][state["players"][1]]) >= 5:
+            await finish_pvp_draft(bid)
+            return
+        current_auto_uid = state["players"][state["turn"]]
+        if auto_fill_pvp_team_if_needed(state, current_auto_uid):
+            advance_pvp_turn(state)
+            continue
+        break
+
+    if len(state["teams"][state["players"][0]]) >= 5 and len(state["teams"][state["players"][1]]) >= 5:
+        await finish_pvp_draft(bid)
         return
 
     current_uid = state["players"][state["turn"]]
@@ -2477,7 +2623,7 @@ async def auto_pick_pvp(bid, round_no, turn_no):
         state = active_pvp.get(bid)
         return bool(state and not state.get("done") and state.get("round") == round_no and state.get("turn") == turn_no and state.get("options"))
 
-    await asyncio.sleep(CHOICE_WARN_10_AFTER)
+    await asyncio.sleep(10)
     if not await alive():
         return
     state = active_pvp.get(bid)
@@ -2487,7 +2633,7 @@ async def auto_pick_pvp(bid, round_no, turn_no):
     except Exception:
         pass
 
-    await asyncio.sleep(CHOICE_WARN_5_AFTER - CHOICE_WARN_10_AFTER)
+    await asyncio.sleep(5)
     if not await alive():
         return
     state = active_pvp.get(bid)
@@ -2497,7 +2643,7 @@ async def auto_pick_pvp(bid, round_no, turn_no):
     except Exception:
         pass
 
-    await asyncio.sleep(CHOICE_TIMEOUT_SECONDS - CHOICE_WARN_5_AFTER)
+    await asyncio.sleep(5)
     if not await alive():
         return
     state = active_pvp.get(bid)
@@ -2649,6 +2795,7 @@ async def resolve_pvp_battle(bid):
             DATA["users"][winner_uid]["fistiks"] = DATA["users"][winner_uid].get("fistiks", 0) + 160
             add_xp(DATA["users"][winner_uid], 120)
             add_pass_task_progress(DATA["users"][winner_uid], "battle", 1)
+            add_newbie_task_progress(DATA["users"][winner_uid], "battle", 1)
             add_pass_task_progress(DATA["users"][winner_uid], "win", 1)
         if loser_uid in DATA["users"]:
             DATA["users"][loser_uid]["losses"] = DATA["users"][loser_uid].get("losses", 0) + 1
@@ -2656,6 +2803,7 @@ async def resolve_pvp_battle(bid):
             DATA["users"][loser_uid]["fistiks"] = DATA["users"][loser_uid].get("fistiks", 0) + 60
             add_xp(DATA["users"][loser_uid], 60)
             add_pass_task_progress(DATA["users"][loser_uid], "battle", 1)
+            add_newbie_task_progress(DATA["users"][loser_uid], "battle", 1)
         state["scored"] = True
         save_json(DATA_FILE, DATA)
 
@@ -2699,8 +2847,15 @@ async def pvp_start(callback: types.CallbackQuery):
         await callback.answer("Ты не участник этого PvP.", show_alert=True)
         return
 
-    state.setdefault("starters", {})[uid] = starter_idx
+    if uid in state.setdefault("starters", {}):
+        await callback.answer("Ты уже выбрал стартового персонажа.", show_alert=True)
+        return
+    state["starters"][uid] = starter_idx
     other = pvp_other_player(state, uid)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await callback.answer("Стартовый персонаж выбран.")
 
     try:
@@ -2712,7 +2867,13 @@ async def pvp_start(callback: types.CallbackQuery):
             await bot.send_message(int(other), f"📌 {e(state['names'].get(uid, uid))} выбрал стартового персонажа. Твой выбор всё ещё нужен.")
         except Exception:
             pass
+        return
 
+    for target in state["players"]:
+        try:
+            await bot.send_message(int(target), "⚔️ Оба стартовых персонажа выбраны. Бой начинается по раундам.")
+        except Exception:
+            pass
     await resolve_pvp_battle(bid)
 
 
@@ -2815,6 +2976,7 @@ async def accept_friend_invite(message, code):
         if inviter in DATA["users"]:
             DATA["users"][inviter]["fistiks"] += 500
             DATA["users"][inviter]["ref_count"] = DATA["users"][inviter].get("ref_count", 0) + 1
+            add_newbie_task_progress(DATA["users"][inviter], "referral", 1)
             add_xp(DATA["users"][inviter], 150)
     save_json(DATA_FILE, DATA)
     await message.answer("👥 Друг добавлен. Реферальный бонус начислен.", reply_markup=main_menu(message.from_user.id))
@@ -2893,6 +3055,7 @@ async def craft_make(callback: types.CallbackQuery):
     card = roll_card(weights={rarity: 1}, allowed_rarities=[rarity])
     result = add_card(p, card["id"])
     add_xp(p, 100)
+    add_newbie_task_progress(p, "craft", 1)
     save_json(DATA_FILE, DATA)
     await callback.message.answer(
         f"⚒️ <b>Крафт завершён</b>\n\n🐉 {e(card['name'])}\n⭐ {rarity_label(card['rarity'])}\n{e(result)}",
@@ -2924,6 +3087,7 @@ async def craft_all(callback: types.CallbackQuery):
         await callback.answer("Недостаточно фрагментов для крафта.", show_alert=True)
         return
     add_xp(p, 100 * len(made))
+    add_newbie_task_progress(p, "craft", len(made))
     save_json(DATA_FILE, DATA)
     text = "⚒️ <b>Крафт всего завершён</b>\n\n"
     for c in made[:20]:
@@ -3032,6 +3196,114 @@ PASS_PREMIUM_REWARDS = {
     15: {"pack": "royal"},
     20: {"fistiks": 3000},
 }
+
+
+NEWBIE_DAYS = 3
+NEWBIE_TASKS = {
+    "daily": {"title": "Забрать ежедневную награду", "target": 1, "reward": {"fistiks": 350, "pass_xp": 120}},
+    "free_pack": {"title": "Открыть бесплатный сундук", "target": 1, "reward": {"fistiks": 300, "pass_xp": 100}},
+    "chest": {"title": "Открыть любой сундук", "target": 1, "reward": {"fistiks": 450, "pass_xp": 130}},
+    "battle": {"title": "Сыграть бой с ботом или игроком", "target": 1, "reward": {"fistiks": 600, "pass_xp": 170}},
+    "craft": {"title": "Сделать 1 крафт", "target": 1, "reward": {"fistiks": 500, "pass_xp": 150}},
+    "referral": {"title": "Привести 1 друга по ссылке", "target": 1, "reward": {"fistiks": 1200, "pass_xp": 250}},
+}
+
+
+def is_newbie_active(uid):
+    if is_owner(uid):
+        return False
+    player = DATA.get("users", {}).get(str(uid), {})
+    created = player.get("created_at") or datetime.now().isoformat()
+    try:
+        return datetime.now() <= datetime.fromisoformat(created) + timedelta(days=NEWBIE_DAYS)
+    except Exception:
+        return True
+
+
+def add_newbie_task_progress(player, key, amount=1):
+    if key not in NEWBIE_TASKS:
+        return
+    created = player.get("created_at") or datetime.now().isoformat()
+    try:
+        if datetime.now() > datetime.fromisoformat(created) + timedelta(days=NEWBIE_DAYS):
+            return
+    except Exception:
+        pass
+    progress = player.setdefault("newbie_progress", {})
+    target = int(NEWBIE_TASKS[key]["target"])
+    progress[key] = min(target, int(progress.get(key, 0)) + int(amount))
+
+
+def format_newbie_tasks(player):
+    progress = player.setdefault("newbie_progress", {})
+    claimed = set(player.setdefault("newbie_claimed", []))
+    lines = []
+    for key, task in NEWBIE_TASKS.items():
+        done = min(int(progress.get(key, 0)), int(task["target"]))
+        mark = "✅" if key in claimed else ("🎯" if done >= task["target"] else "▫️")
+        reward = task["reward"]
+        lines.append(f"{mark} {task['title']}: {done}/{task['target']} → {reward.get('fistiks', 0)} 💎 + {reward.get('pass_xp', 0)} очков pass")
+    return "\n".join(lines)
+
+
+async def send_newbie_start(message, user):
+    p = get_user_data(user)
+    if not is_newbie_active(user.id):
+        await message.answer("🚀 Раздел новичка уже закрыт: он действует только первые 3 дня после первого входа.", reply_markup=back_menu())
+        return
+    created = p.get("created_at") or datetime.now().isoformat()
+    try:
+        expires = datetime.fromisoformat(created) + timedelta(days=NEWBIE_DAYS)
+        left = expires - datetime.now()
+        left_text = f"ещё примерно {max(0, left.days)} дн. {max(0, left.seconds // 3600)} ч."
+    except Exception:
+        left_text = "первые 3 дня"
+    text = (
+        "🚀 <b>Старт новичка</b>\n\n"
+        f"Доступно временно: <b>{e(left_text)}</b>\n\n"
+        "Здесь лёгкие задания, чтобы быстро встать на ноги, открыть сундуки и привыкнуть к игре.\n\n"
+        f"{format_newbie_tasks(p)}"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎁 Забрать выполненные", callback_data="newbie_claim")],
+        [InlineKeyboardButton(text="🎁 Награда", callback_data="daily"), InlineKeyboardButton(text="📦 Сундуки", callback_data="chests")],
+        [InlineKeyboardButton(text="⚔️ Бой с ботом", callback_data="battle:start"), InlineKeyboardButton(text="⚒️ Крафт", callback_data="craft")],
+        [InlineKeyboardButton(text="🔗 Реферальная ссылка", callback_data="friend_link")],
+        [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
+    ])
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "newbie_start")
+async def newbie_start_cb(callback: types.CallbackQuery):
+    await send_newbie_start(callback.message, callback.from_user)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "newbie_claim")
+async def newbie_claim_cb(callback: types.CallbackQuery):
+    p = get_user_data(callback.from_user)
+    if not is_newbie_active(callback.from_user.id):
+        await callback.answer("Старт новичка уже закрыт.", show_alert=True)
+        return
+    progress = p.setdefault("newbie_progress", {})
+    claimed = set(p.setdefault("newbie_claimed", []))
+    lines = []
+    for key, task in NEWBIE_TASKS.items():
+        if key in claimed:
+            continue
+        if int(progress.get(key, 0)) >= int(task["target"]):
+            reward = task["reward"]
+            p["fistiks"] = p.get("fistiks", 0) + int(reward.get("fistiks", 0))
+            p["pass_xp"] = int(p.get("pass_xp", 0)) + int(reward.get("pass_xp", 0))
+            p["newbie_claimed"].append(key)
+            lines.append(f"✅ {e(task['title'])}: +{reward.get('fistiks', 0)} 💎 +{reward.get('pass_xp', 0)} очков pass")
+    if not lines:
+        await callback.answer("Пока нет выполненных новичковых заданий.", show_alert=True)
+        return
+    save_json(DATA_FILE, DATA)
+    await callback.message.answer("🚀 <b>Новичковые награды получены</b>\n\n" + "\n".join(lines), reply_markup=back_menu(), parse_mode="HTML")
+    await callback.answer()
 
 
 PASS_DAILY_TASKS = {
@@ -3335,9 +3607,12 @@ async def successful_payment(message: types.Message):
 
 
 async def send_modes(message, user):
+    p = get_user_data(user)
+    source_names = {"deck": "моя колода", "random_bot": "рандом от бота", "manual": "ручной драфт"}
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🌌 Арена мультивселенной", callback_data="battle:start")],
         [InlineKeyboardButton(text="🌐 Онлайн-бой", callback_data="online_search")],
+        [InlineKeyboardButton(text="⚙️ Команда PvP/друга", callback_data="pvp_source_menu")],
         [InlineKeyboardButton(text="🧬 Колода", callback_data="deck")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
     ])
@@ -3345,11 +3620,50 @@ async def send_modes(message, user):
         "🎮 <b>Режимы</b>\n\n"
         "🌌 <b>Арена мультивселенной</b> — бой против ИИ на выбранной арене.\n"
         "🌐 <b>Онлайн-бой</b> — скрытый PvP против живого игрока.\n"
+        f"⚙️ <b>Текущий выбор PvP-команды:</b> {e(source_names.get(p.get('pvp_team_source', 'deck'), 'моя колода'))}.\n"
         "🧬 <b>Колода</b> — сила твоей коллекции и автоулучшение.",
         reply_markup=kb,
         parse_mode="HTML"
     )
 
+
+
+async def send_pvp_source_menu(message, user):
+    p = get_user_data(user)
+    current = p.get("pvp_team_source", "deck")
+    names = {"deck": "🧬 Моя колода", "random_bot": "🤖 Рандом от бота", "manual": "🎲 Ручной скрытый драфт"}
+    text = (
+        "⚙️ <b>Выбор команды для PvP/друга</b>\n\n"
+        f"Сейчас: <b>{e(names.get(current, '🧬 Моя колода'))}</b>\n\n"
+        "Это индивидуальная настройка. Один игрок может идти своей колодой, другой — рандомом от бота. "
+        "Выбор каждого сохраняется отдельно."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧬 Играть своей колодой", callback_data="pvp_source:set:deck")],
+        [InlineKeyboardButton(text="🤖 Играть рандомом от бота", callback_data="pvp_source:set:random_bot")],
+        [InlineKeyboardButton(text="🎲 Ручной скрытый драфт", callback_data="pvp_source:set:manual")],
+        [InlineKeyboardButton(text="⬅️ Режимы", callback_data="modes")],
+    ])
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "pvp_source_menu")
+async def pvp_source_menu_cb(callback: types.CallbackQuery):
+    await send_pvp_source_menu(callback.message, callback.from_user)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("pvp_source:set:"))
+async def pvp_source_set_cb(callback: types.CallbackQuery):
+    mode = callback.data.split(":", 2)[2]
+    if mode not in {"deck", "random_bot", "manual"}:
+        await callback.answer("Неизвестный режим.", show_alert=True)
+        return
+    p = get_user_data(callback.from_user)
+    p["pvp_team_source"] = mode
+    save_json(DATA_FILE, DATA)
+    await send_pvp_source_menu(callback.message, callback.from_user)
+    await callback.answer("Выбор сохранён.")
 
 
 @dp.callback_query(F.data == "modes")
@@ -3446,6 +3760,7 @@ async def mega_buy(callback: types.CallbackQuery):
             got.append((card, add_card(p, card["id"])))
     add_xp(p, 60 * amount)
     add_pass_task_progress(p, "chest", amount)
+    add_newbie_task_progress(p, "chest", amount)
     save_json(DATA_FILE, DATA)
     await send_pack_result(callback.message, f"Мега-открытие: {pack['name']} x{amount}", got, p)
     await callback.answer()
