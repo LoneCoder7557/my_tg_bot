@@ -25,9 +25,9 @@ MAX_LEVEL = 100
 CARD_UNLOCK_FRAGMENTS = 100
 FRIEND_ID_DEFAULT = "527802531"
 CHOICE_TIMEOUT_SECONDS = 20
-CHOICE_WARN_10_AFTER = 10
-CHOICE_WARN_5_AFTER = 15
-PASS_PRICE_STARS = 149
+CHOICE_WARN_10_AFTER = max(0, CHOICE_TIMEOUT_SECONDS - 10)
+CHOICE_WARN_5_AFTER = max(0, CHOICE_TIMEOUT_SECONDS - 5)
+PASS_PRICE_STARS = 199
 
 ARENAS = {
     "ruins": ("🏛", "Руины мультивселенной", "ломаная арена с укрытиями, где важны скорость и контроль"),
@@ -57,28 +57,28 @@ BATTLE_EVENTS = [
 ]
 
 RARITY_WEIGHTS = {
-    # Обычных больше всего; дальше шанс падает. Мифические — самые редкие.
-    "Обычный": 760,
-    "Редкий": 190,
-    "Эпический": 45,
-    "Легендарный": 14,
-    "Мифический": 4,
+    # Жёсткий дроп: легендарные и мифические выпадают заметно реже.
+    "Обычный": 850,
+    "Редкий": 120,
+    "Эпический": 25,
+    "Легендарный": 4,
+    "Мифический": 1,
 }
 
 FREE_PACK_WEIGHTS = {
-    "Обычный": 78,
-    "Редкий": 18,
-    "Эпический": 4,
-    "Мифический": 0,
+    "Обычный": 88,
+    "Редкий": 11,
+    "Эпический": 1,
     "Легендарный": 0,
+    "Мифический": 0,
 }
 
 BATTLE_PLAYER_WEIGHTS = {
-    "Обычный": 600,
-    "Редкий": 250,
-    "Эпический": 100,
-    "Легендарный": 35,
-    "Мифический": 15,
+    "Обычный": 720,
+    "Редкий": 210,
+    "Эпический": 55,
+    "Легендарный": 12,
+    "Мифический": 3,
 }
 
 OWNER_BATTLE_WEIGHTS = {
@@ -98,33 +98,33 @@ RIGHT_HAND_BATTLE_WEIGHTS = {
 }
 
 BOT_BATTLE_WEIGHTS_NEWBIE = {
-    "Обычный": 760,
-    "Редкий": 210,
-    "Эпический": 30,
-    "Мифический": 0,
+    "Обычный": 880,
+    "Редкий": 115,
+    "Эпический": 5,
     "Легендарный": 0,
+    "Мифический": 0,
 }
 
 BOT_BATTLE_WEIGHTS_NORMAL = {
-    "Обычный": 650,
-    "Редкий": 235,
-    "Эпический": 85,
-    "Легендарный": 22,
-    "Мифический": 8,
+    "Обычный": 760,
+    "Редкий": 190,
+    "Эпический": 40,
+    "Легендарный": 8,
+    "Мифический": 2,
 }
 
 RARE_PACK_WEIGHTS = {
-    "Обычный": 560,
-    "Редкий": 270,
-    "Эпический": 125,
-    "Легендарный": 35,
-    "Мифический": 10,
+    "Обычный": 700,
+    "Редкий": 230,
+    "Эпический": 60,
+    "Легендарный": 8,
+    "Мифический": 2,
 }
 
 CASE_WEIGHTS = {
-    "mystic": {"Обычный": 0, "Редкий": 200, "Эпический": 400, "Легендарный": 320, "Мифический": 80},
-    "event": {"Обычный": 300, "Редкий": 350, "Эпический": 220, "Легендарный": 100, "Мифический": 30},
-    "holiday": {"Обычный": 450, "Редкий": 320, "Эпический": 170, "Легендарный": 50, "Мифический": 10},
+    "mystic": {"Обычный": 0, "Редкий": 360, "Эпический": 460, "Легендарный": 165, "Мифический": 15},
+    "event": {"Обычный": 470, "Редкий": 350, "Эпический": 150, "Легендарный": 25, "Мифический": 5},
+    "holiday": {"Обычный": 620, "Редкий": 270, "Эпический": 95, "Легендарный": 13, "Мифический": 2},
 }
 
 RARITY_BONUS = {
@@ -178,7 +178,7 @@ SHOP_PACKS = {
         "name": "Королевский сундук",
         "base_cost": 3000,
         "count": 6,
-        "weights": {"Обычный": 430, "Редкий": 270, "Эпический": 190, "Мифический": 80, "Легендарный": 30},
+        "weights": {"Обычный": 600, "Редкий": 250, "Эпический": 125, "Легендарный": 20, "Мифический": 5},
         "description": "Дорогой сундук с высоким шансом эпических и легендарных карт.",
     },
 }
@@ -365,8 +365,11 @@ class AutoCleanCallbackMiddleware(BaseMiddleware):
     """Удаляет старое кнопочное окно перед открытием нового раздела."""
     async def __call__(self, handler, event, data):
         try:
-            if isinstance(event, types.CallbackQuery) and event.message and event.data != "noop":
-                await event.message.delete()
+            if isinstance(event, types.CallbackQuery) and event.message:
+                keep_prefixes = ("noop", "pick:", "pvp_pick:", "fight_start:", "fight_next:", "pvp_start:")
+                data_value = event.data or ""
+                if not data_value.startswith(keep_prefixes):
+                    await event.message.delete()
         except Exception:
             pass
         return await handler(event, data)
@@ -417,8 +420,8 @@ def calc_user_level(xp):
 
 
 def add_xp(player, amount):
+    # Обычный XP аккаунта. Мультипасс теперь качается через ежедневные задания.
     player["xp"] = int(player.get("xp", 0)) + int(amount)
-    player["pass_xp"] = int(player.get("pass_xp", 0)) + max(1, int(amount) // 2)
 
 
 def normalize_collection(player):
@@ -465,6 +468,12 @@ def get_user_data(user):
             "claimed_pass_free": [],
             "claimed_pass_premium": [],
             "stars_earned": 0,
+            "deck": [],
+            "auto_team": True,
+            "pass_daily_date": "",
+            "pass_task_progress": {},
+            "pass_task_claimed": [],
+            "pass_purchase_request": "",
         }
         # Стартовая коллекция: чтобы новичок мог сразу войти в арену своими картами.
         starter_ids = ["levi_peak", "mikasa", "kirito_alicization", "gon_base", "tanjiro_sun"]
@@ -477,7 +486,7 @@ def get_user_data(user):
     for k, v in {
         "xp": 0, "badges": [], "premium": False, "used_promos": [], "last_daily": "",
         "last_free_pack": "", "free_pack_notified": False, "last_free_notice": "", "ref_by": "", "ref_count": 0,
-        "wins": 0, "losses": 0, "battles": 0, "last_seen": "", "ref_earned": 0, "nickname": "", "pass_xp": 0, "pass_premium": False, "claimed_pass_free": [], "claimed_pass_premium": [], "stars_earned": 0,
+        "wins": 0, "losses": 0, "battles": 0, "last_seen": "", "ref_earned": 0, "nickname": "", "pass_xp": 0, "pass_premium": False, "claimed_pass_free": [], "claimed_pass_premium": [], "stars_earned": 0, "deck": [], "auto_team": True, "pass_daily_date": "", "pass_task_progress": {}, "pass_task_claimed": [], "pass_purchase_request": "",
     }.items():
         player.setdefault(k, v)
     if player.get("nickname"):
@@ -495,6 +504,8 @@ def get_user_data(user):
         player["battles"] = max(player.get("battles", 0), 1000)
         player["xp"] = max(player.get("xp", 0), 999999)
         player["premium"] = True
+        player["pass_premium"] = True
+        player["pass_xp"] = max(int(player.get("pass_xp", 0)), 25000)
         if "DEV" not in player["badges"]:
             player["badges"].append("DEV")
         for cid in CARD_BY_ID:
@@ -653,12 +664,12 @@ def add_fragments(player, card_id, amount):
 
 def full_card_drop_chance(rarity):
     return {
-        "Обычный": 0.18,
-        "Редкий": 0.10,
-        "Эпический": 0.06,
-        "Легендарный": 0.025,
-        "Мифический": 0.008,
-    }.get(rarity, 0.10)
+        "Обычный": 0.16,
+        "Редкий": 0.075,
+        "Эпический": 0.035,
+        "Легендарный": 0.010,
+        "Мифический": 0.003,
+    }.get(rarity, 0.08)
 
 
 def fragment_amount_for(rarity):
@@ -666,8 +677,8 @@ def fragment_amount_for(rarity):
         "Обычный": (18, 35),
         "Редкий": (14, 28),
         "Эпический": (10, 22),
-        "Легендарный": (5, 14),
-        "Мифический": (3, 8),
+        "Легендарный": (4, 10),
+        "Мифический": (2, 5),
     }.get(rarity, (10, 20))
     return random.randint(*low_high)
 
@@ -730,6 +741,61 @@ def roll_card_for_user(uid, weights=None, exclude=None):
         w = 1 + lvl // 6 + RARITY_BONUS.get(card["rarity"], 0) // 10
         pool.extend([card] * max(1, min(w, 30)))
     return random.choice(pool)
+
+
+def card_level_for_user(uid, card_id):
+    player = DATA.get("users", {}).get(str(uid), {})
+    return int(player.get("collection", {}).get(card_id, {}).get("level", 1))
+
+
+def best_owned_card_ids(uid, limit=5):
+    owned = collection_candidates(uid)
+    owned.sort(key=lambda item: card_power(item[0], item[1]), reverse=True)
+    return [card["id"] for card, lvl, shards in owned[:limit]]
+
+
+def build_player_team_from_deck(uid):
+    """Берёт сохранённую колоду. Если её нет — автособирает топ-5 из коллекции."""
+    player = DATA.get("users", {}).get(str(uid), {})
+    deck = [cid for cid in player.get("deck", []) if cid in CARD_BY_ID and int(player.get("collection", {}).get(cid, {}).get("count", 0)) > 0]
+    if len(deck) < 5 or player.get("auto_team", True):
+        deck = best_owned_card_ids(uid, 5)
+        player["deck"] = deck
+        player["auto_team"] = True
+    team = []
+    for cid in deck[:5]:
+        team.append(make_instance(CARD_BY_ID[cid], card_level_for_user(uid, cid)))
+    return team
+
+
+def bot_weights_for_difficulty(difficulty):
+    d = max(1, min(10, int(difficulty or 5)))
+    if d <= 2:
+        return {"Обычный": 920, "Редкий": 75, "Эпический": 5, "Легендарный": 0, "Мифический": 0}
+    if d <= 4:
+        return {"Обычный": 820, "Редкий": 150, "Эпический": 27, "Легендарный": 3, "Мифический": 0}
+    if d <= 6:
+        return {"Обычный": 690, "Редкий": 220, "Эпический": 75, "Легендарный": 13, "Мифический": 2}
+    if d <= 8:
+        return {"Обычный": 520, "Редкий": 260, "Эпический": 160, "Легендарный": 50, "Мифический": 10}
+    return {"Обычный": 330, "Редкий": 250, "Эпический": 260, "Легендарный": 130, "Мифический": 30}
+
+
+def bot_level_for_difficulty(difficulty):
+    d = max(1, min(10, int(difficulty or 5)))
+    base = d * 10
+    return max(1, min(MAX_LEVEL, base + random.randint(-4, 6)))
+
+
+def build_bot_team(difficulty, exclude=None):
+    weights = bot_weights_for_difficulty(difficulty)
+    used = set(exclude or [])
+    team = []
+    for _ in range(5):
+        card = roll_card(weights=weights, exclude=used)
+        used.add(card["id"])
+        team.append(make_instance(card, bot_level_for_difficulty(difficulty)))
+    return team
 
 
 def cancel_choice_timer(key):
@@ -797,13 +863,19 @@ def battle_story(player_name, bot_name, player_team, bot_team, player_score, bot
     )
 
 
-def make_instance(card):
-    return {"card_id": card["id"], "buff": random.choice(BUFFS), "debuff": random.choice(DEBUFFS), "artifact": random.choice(ARTIFACTS)}
+def make_instance(card, level=1):
+    return {
+        "card_id": card["id"],
+        "level": max(1, min(MAX_LEVEL, int(level or 1))),
+        "buff": random.choice(BUFFS),
+        "debuff": random.choice(DEBUFFS),
+        "artifact": random.choice(ARTIFACTS),
+    }
 
 
 def instance_score(inst):
     card = CARD_BY_ID[inst["card_id"]]
-    score = card_power(card)
+    score = card_power(card, int(inst.get("level", 1)))
     for mod in [inst["buff"], inst["debuff"], inst["artifact"]]:
         score += sum(mod["delta"].values())
     return score
@@ -834,10 +906,11 @@ def card_short(card, index=None):
 
 def format_instance(inst, n):
     c = CARD_BY_ID[inst["card_id"]]
+    lvl = int(inst.get("level", 1))
     return (
         f"{n}. 🐉 <b>{e(c['name'])}</b> — {rarity_label(c['rarity'])}\n"
         f"   🌍 {e(c['anime'])} | 🎭 {e(c['form'])}\n"
-        f"   ⚔️ Сила: {card_power(c)}\n"
+        f"   📈 Ур. {lvl}/{MAX_LEVEL} | ⚔️ Сила: {card_power(c, lvl)}\n"
         f"   ➕ {e(inst['buff']['name'])}: {e(inst['buff']['text'])}\n"
         f"   ➖ {e(inst['debuff']['name'])}: {e(inst['debuff']['text'])}\n"
         f"   🗡 {e(inst['artifact']['name'])}: {e(inst['artifact']['text'])}"
@@ -1143,22 +1216,59 @@ async def deck_cb(callback: types.CallbackQuery):
     p = get_user_data(callback.from_user)
     owned = [(cid, info) for cid, info in p.get("collection", {}).items() if cid in CARD_BY_ID and int(info.get("count", 0)) > 0]
     owned.sort(key=lambda x: card_power(CARD_BY_ID[x[0]], int(x[1].get("level", 1))), reverse=True)
+
+    if p.get("auto_team", True) or len([cid for cid in p.get("deck", []) if cid in CARD_BY_ID]) < 5:
+        p["deck"] = [cid for cid, _info in owned[:5]]
+        p["auto_team"] = True
+        save_json(DATA_FILE, DATA)
+
     text = "🧬 <b>Колода</b>\n\n"
-    text += "Здесь можно быстро оценить своих лучших бойцов. Арена теперь использует только открытые карты из этой коллекции.\n\n"
-    if not owned:
-        text += "Пока нет открытых карт. Открой сундуки или собери карту из 100 фрагментов."
-    else:
-        text += "<b>Автосбор сильнейшей команды:</b>\n"
-        for n, (cid, info) in enumerate(owned[:5], 1):
+    text += f"Автосбор команды: <b>{'включён' if p.get('auto_team', True) else 'выключен'}</b>\n"
+    text += "Бой с ботом теперь стартует именно от твоей колоды, а не от случайной каши.\n\n"
+
+    deck_ids = [cid for cid in p.get("deck", []) if cid in CARD_BY_ID]
+    if deck_ids:
+        text += "<b>Текущая команда 5 бойцов:</b>\n"
+        for n, cid in enumerate(deck_ids[:5], 1):
             c = CARD_BY_ID[cid]
-            lvl = int(info.get("level", 1))
+            lvl = int(p.get("collection", {}).get(cid, {}).get("level", 1))
             text += f"{n}. {rarity_label(c['rarity'])} <b>{e(c['name'])}</b> | ур. {lvl}/{MAX_LEVEL} | сила {card_power(c, lvl)}\n"
+    else:
+        text += "Пока нет открытых карт. Открой сундуки или собери карту из 100 фрагментов."
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧠 Автособрать топ-5", callback_data="auto_build_deck")],
+        [InlineKeyboardButton(text="🔁 Переключить автосбор", callback_data="toggle_auto_team")],
         [InlineKeyboardButton(text="⚡ Автоулучшить доступное", callback_data="auto_upgrade")],
         [InlineKeyboardButton(text="⚔️ В бой", callback_data="battle:start")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")]
     ])
     await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "auto_build_deck")
+async def auto_build_deck_cb(callback: types.CallbackQuery):
+    p = get_user_data(callback.from_user)
+    deck = best_owned_card_ids(callback.from_user.id, 5)
+    if len(deck) < 5:
+        await callback.answer("Нужно минимум 5 открытых карт.", show_alert=True)
+        return
+    p["deck"] = deck
+    p["auto_team"] = True
+    save_json(DATA_FILE, DATA)
+    await callback.message.answer("🧠 Колода собрана автоматически: поставлены 5 сильнейших открытых карт.", reply_markup=back_menu())
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "toggle_auto_team")
+async def toggle_auto_team_cb(callback: types.CallbackQuery):
+    p = get_user_data(callback.from_user)
+    p["auto_team"] = not bool(p.get("auto_team", True))
+    if p["auto_team"]:
+        p["deck"] = best_owned_card_ids(callback.from_user.id, 5)
+    save_json(DATA_FILE, DATA)
+    await callback.message.answer(f"🔁 Автосбор команды: <b>{'включён' if p['auto_team'] else 'выключен'}</b>", reply_markup=back_menu(), parse_mode="HTML")
     await callback.answer()
 
 
@@ -1281,6 +1391,7 @@ async def send_daily(message, user):
     p["last_daily"] = today
     p["fistiks"] += 250
     add_xp(p, 35)
+    add_pass_task_progress(p, "daily", 1)
     save_json(DATA_FILE, DATA)
     await message.answer("🎁 Ежедневная награда получена: +250 💎 фисташек и +35 XP.", reply_markup=back_menu())
 
@@ -1443,6 +1554,7 @@ async def buy_pack(callback: types.CallbackQuery):
         pulled.add(card["id"])
         got.append((card, result))
     add_xp(p, xp)
+    add_pass_task_progress(p, "chest", 1)
     save_json(DATA_FILE, DATA)
     await send_pack_result(callback.message, name, got, p)
     await callback.answer()
@@ -1603,7 +1715,7 @@ async def show_arena_select(message, user):
     rows = []
     text = (
         "🌌 <b>Арена мультивселенной</b>\n\n"
-        "Выбери фон боя. У каждой арены есть свои плюсы и минусы.\n\n"
+        "Выбери фон боя. Потом выберешь сложность бота от 1 до 10.\n\n"
     )
     for code_key, (emoji, name, desc) in ARENAS.items():
         plus, minus = ARENA_EFFECTS.get(code_key, ("➕ нейтрально", "➖ нейтрально"))
@@ -1611,34 +1723,74 @@ async def show_arena_select(message, user):
         rows.append([InlineKeyboardButton(text=f"{emoji} {name}", callback_data=f"battle:arena:{code_key}")])
     rows.append([InlineKeyboardButton(text="🎲 Случайная арена", callback_data="battle:arena:random")])
     rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")])
-    await message.answer(text + "⏱ В каждом раунде выбора будет 20 секунд.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
 
-async def start_battle_for(message, user, arena_code="random"):
+async def show_difficulty_select(message, user, arena_code):
     if arena_code == "random" or arena_code not in ARENAS:
         arena_code = random.choice(list(ARENAS.keys()))
     emoji, arena_name, arena_desc = ARENAS[arena_code]
-    active_battles[user.id] = {
-        "round": 1,
-        "player": [],
-        "bot": [],
-        "options": [],
-        "done": False,
-        "chat_id": message.chat.id,
-        "arena": arena_code,
-    }
-    await send_arena_media(message, arena_code)
+    rows = []
+    for start in [1, 6]:
+        rows.append([
+            InlineKeyboardButton(text=str(i), callback_data=f"battle:diff:{arena_code}:{i}")
+            for i in range(start, start + 5)
+        ])
+    rows.append([InlineKeyboardButton(text="⬅️ Арены", callback_data="battle:start")])
     await message.answer(
-        f"⚔️ <b>Бой с ботом начался</b>\n\n"
+        f"🤖 <b>Сложность бота</b>\n\n"
         f"{emoji} Арена: <b>{e(arena_name)}</b>\n"
-        f"— {e(arena_desc)}.\n"
-        f"{e(ARENA_EFFECTS.get(arena_code, ('', ''))[0])}\n"
-        f"{e(ARENA_EFFECTS.get(arena_code, ('', ''))[1])}\n\n"
-        "5 раундов выбора. Выбирай 1 карту из 5.\n"
-        f"{option_roll_text()}",
+        f"— {e(arena_desc)}.\n\n"
+        "1 — слабый бот, 5 — нормальный, 10 — адская мясорубка.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         parse_mode="HTML"
     )
-    await send_battle_round(message, user.id)
+
+
+async def start_battle_for(message, user, arena_code="random", difficulty=5):
+    if arena_code == "random" or arena_code not in ARENAS:
+        arena_code = random.choice(list(ARENAS.keys()))
+    difficulty = max(1, min(10, int(difficulty or 5)))
+    p = get_user_data(user)
+    player_team = build_player_team_from_deck(user.id)
+    if len(player_team) < 5:
+        await message.answer(
+            "🃏 Для боя нужна колода из 5 открытых карт. Открой сундуки или собери карты из фрагментов.",
+            reply_markup=main_menu(user.id),
+            parse_mode="HTML"
+        )
+        return
+
+    bot_team = build_bot_team(difficulty, exclude=[i["card_id"] for i in player_team])
+    emoji, arena_name, arena_desc = ARENAS[arena_code]
+    active_battles[user.id] = {
+        "round": 1,
+        "player": player_team,
+        "bot": bot_team,
+        "options": [],
+        "done": True,
+        "chat_id": message.chat.id,
+        "arena": arena_code,
+        "difficulty": difficulty,
+        "resolved": False,
+    }
+    await send_arena_media(message, arena_code)
+    text = (
+        f"⚔️ <b>Бой с ботом готов</b>\n\n"
+        f"{emoji} Арена: <b>{e(arena_name)}</b>\n"
+        f"— {e(arena_desc)}.\n"
+        f"🤖 Сложность бота: <b>{difficulty}/10</b>\n\n"
+        "👤 <b>Твоя колода</b>\n"
+    )
+    for i, inst in enumerate(player_team, 1):
+        text += format_instance(inst, i) + "\n"
+    text += "\n🔒 Команда бота скрыта. Выбери первого бойца — после этого начнётся раунд 1."
+    rows = []
+    for i, inst in enumerate(player_team, 1):
+        c = CARD_BY_ID[inst["card_id"]]
+        rows.append([InlineKeyboardButton(text=f"⚔️ Старт: {i}. {c['name'][:28]}", callback_data=f"fight_start:{i-1}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")])
+    await send_long(message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 @dp.message(Command("battle"))
@@ -1655,7 +1807,19 @@ async def battle_cb(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("battle:arena:"))
 async def battle_arena_cb(callback: types.CallbackQuery):
     arena_code = callback.data.split(":", 2)[2]
-    await start_battle_for(callback.message, callback.from_user, arena_code)
+    await show_difficulty_select(callback.message, callback.from_user, arena_code)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("battle:diff:"))
+async def battle_diff_cb(callback: types.CallbackQuery):
+    try:
+        _, _, arena_code, diff_s = callback.data.split(":")
+        difficulty = int(diff_s)
+    except Exception:
+        await callback.answer("Ошибка сложности.", show_alert=True)
+        return
+    await start_battle_for(callback.message, callback.from_user, arena_code, difficulty)
     await callback.answer()
 
 
@@ -1752,7 +1916,7 @@ async def process_battle_pick(uid, idx, auto=False, callback_message=None, user_
     cancel_choice_timer(("battle", uid, state["round"]))
 
     card = CARD_BY_ID[state["options"][idx]]
-    inst = make_instance(card)
+    inst = make_instance(card, card_level_for_user(uid, card["id"]))
     state["player"].append(inst)
 
     player = DATA.get("users", {}).get(str(uid))
@@ -1779,7 +1943,7 @@ async def process_battle_pick(uid, idx, auto=False, callback_message=None, user_
                 opts.append(roll_card(weights=bot_weights, exclude=bot_exclude + [i["card_id"] for i in state["bot"]] + [x["id"] for x in opts]))
             opts = sorted(opts, key=lambda c: card_power(c), reverse=True)
             pick = opts[0] if random.random() < 0.35 else random.choice(opts[:3])
-            state["bot"].append(make_instance(pick))
+            state["bot"].append(make_instance(pick, bot_level_for_difficulty(state.get("difficulty", 5))))
 
         proxy = type("MessageProxy", (), {"chat": type("Chat", (), {"id": chat_id})(), "answer": lambda self, text, **kwargs: bot.send_message(chat_id, text, **kwargs)})()
         fake_user = type("UserProxy", (), {"id": uid})()
@@ -1830,59 +1994,167 @@ async def finish_battle(message, user):
     await send_long(message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
-async def resolve_solo_fight(callback: types.CallbackQuery, starter_idx=0):
+async def start_solo_fight(callback: types.CallbackQuery, starter_idx=0):
     uid = callback.from_user.id
     if uid not in active_battles or not active_battles[uid].get("done"):
-        await callback.answer("Сначала собери команду.", show_alert=True)
+        await callback.answer("Сначала собери колоду.", show_alert=True)
         return
     state = active_battles[uid]
     if state.get("resolved"):
         await callback.answer("Этот бой уже рассчитан.", show_alert=True)
         return
 
-    user_data = get_user_data(callback.from_user)
+    starter_idx = max(0, min(int(starter_idx or 0), len(state["player"]) - 1))
+    bot_starter = random.randrange(len(state["bot"])) if state.get("bot") else 0
+
+    state["fight_started"] = True
+    state["fight_round"] = 0
+    state["player_points"] = 0
+    state["bot_points"] = 0
+    state["fight_log"] = []
+    state["remaining_player_indices"] = [i for i in range(len(state["player"])) if i != starter_idx]
+    state["bot_order"] = ordered_team(state["bot"], bot_starter)
+    await process_solo_fight_round(callback.message, callback.from_user, starter_idx)
+    await callback.answer()
+
+
+async def process_solo_fight_round(message, user, player_idx):
+    uid = user.id
+    state = active_battles.get(uid)
+    if not state or state.get("resolved"):
+        return
+
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    user_data = get_user_data(user)
     player_name = user_data["name"]
     arena_code = state.get("arena", "ruins")
     emoji, arena_name, arena_desc = ARENAS.get(arena_code, ARENAS["ruins"])
-    bot_starter = random.randrange(len(state["bot"])) if state.get("bot") else 0
 
-    winner, ppoints, bpoints, rounds_text, summary = resolve_step_battle(
-        player_name, "Бот", state["player"], state["bot"], arena_code, starter_idx, bot_starter
+    round_no = int(state.get("fight_round", 0)) + 1
+    bot_order = state.get("bot_order") or state["bot"]
+    if round_no > min(len(state["player"]), len(bot_order)):
+        await finish_solo_interactive(message, user)
+        return
+
+    player_inst = state["player"][player_idx]
+    bot_inst = bot_order[round_no - 1]
+    result, line = duel_line(round_no, player_name, "Бот", player_inst, bot_inst, arena_code)
+    if result == 1:
+        state["player_points"] = int(state.get("player_points", 0)) + 1
+    else:
+        state["bot_points"] = int(state.get("bot_points", 0)) + 1
+    state["fight_round"] = round_no
+    state.setdefault("fight_log", []).append(line)
+
+    player_card = CARD_BY_ID[player_inst["card_id"]]
+    bot_card = CARD_BY_ID[bot_inst["card_id"]]
+    score_text = f"{player_name} {state['player_points']} : {state['bot_points']} Бот"
+
+    text = (
+        f"🎬 <b>Раунд {round_no}</b>\n\n"
+        f"{emoji} Арена: <b>{e(arena_name)}</b>\n"
+        f"🤖 Сложность: <b>{state.get('difficulty', 5)}/10</b>\n\n"
+        f"👤 Ты выставил: <b>{e(player_card['name'])}</b> — {rarity_label(player_card['rarity'])}\n"
+        f"🤖 Бот выставил: <b>{e(bot_card['name'])}</b> — {rarity_label(bot_card['rarity'])}\n\n"
+        f"{line}\n"
+        f"📊 <b>Счёт:</b> {e(score_text)}"
     )
+
+    remaining = state.get("remaining_player_indices", [])
+    if player_idx in remaining:
+        remaining.remove(player_idx)
+    if round_no >= 5 or not remaining:
+        await message.answer(text, parse_mode="HTML")
+        await finish_solo_interactive(message, user)
+        return
+
+    rows = []
+    for idx in remaining:
+        c = CARD_BY_ID[state["player"][idx]["card_id"]]
+        rows.append([InlineKeyboardButton(text=f"➡️ Раунд {round_no + 1}: {c['name'][:30]}", callback_data=f"fight_next:{idx}")])
+    await message.answer(
+        text + "\n\nВыбери бойца на следующий раунд.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        parse_mode="HTML"
+    )
+
+
+async def finish_solo_interactive(message, user):
+    uid = user.id
+    state = active_battles.get(uid)
+    if not state or state.get("resolved"):
+        return
+
+    user_data = get_user_data(user)
+    player_name = user_data["name"]
+    ppoints = int(state.get("player_points", 0))
+    bpoints = int(state.get("bot_points", 0))
+
+    if ppoints == bpoints:
+        player_total = team_score(state["player"]) + random.randint(-20, 20)
+        bot_total = team_score(state["bot"]) + random.randint(-20, 20)
+        winner = player_name if player_total >= bot_total else "Бот"
+        tie_text = f"⚖️ Ничья по очкам. Решила общая сила: {player_total} vs {bot_total}.\n"
+    else:
+        winner = player_name if ppoints > bpoints else "Бот"
+        tie_text = ""
 
     if winner == player_name:
         user_data["wins"] += 1
-        reward = 120
-        xp = 90
+        reward = 120 + int(state.get("difficulty", 5)) * 8
+        xp = 90 + int(state.get("difficulty", 5)) * 4
+        add_pass_task_progress(user_data, "win", 1)
     else:
         user_data["losses"] += 1
         reward = 40
         xp = 45
     user_data["battles"] += 1
-    if not is_owner(callback.from_user.id):
+    add_pass_task_progress(user_data, "battle", 1)
+
+    if not is_owner(uid):
         user_data["fistiks"] += reward
     add_xp(user_data, xp)
     state["resolved"] = True
     save_json(DATA_FILE, DATA)
 
     bot_team_text = "\n".join(format_instance(inst, i) for i, inst in enumerate(state["bot"], 1))
+    log_text = "\n".join(state.get("fight_log", []))
+    summary = (
+        f"📊 <b>Итоговый счёт:</b> {e(player_name)} {ppoints} : {bpoints} Бот\n"
+        f"{tie_text}"
+        f"🏆 <b>Победитель:</b> {e(winner)}"
+    )
     text = (
-        f"⚔️ <b>Бой начался</b>\n\n"
-        f"{emoji} <b>Арена:</b> {e(arena_name)}\n"
-        f"— {e(arena_desc)}.\n\n"
-        f"🤖 <b>Команда бота раскрыта</b>\n{bot_team_text}\n\n"
-        f"🎬 <b>Пошаговый бой</b>\n\n"
-        f"{rounds_text}\n\n"
+        f"🏁 <b>Бой завершён</b>\n\n"
+        f"{log_text}\n\n"
+        f"🤖 <b>Полная команда бота</b>\n{bot_team_text}\n\n"
         f"{summary}\n\n"
         f"🎁 Награда: +{reward} 💎 и +{xp} XP"
     )
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚖️ Оспорить", callback_data="appeal")],
         [InlineKeyboardButton(text="🔁 Новый бой", callback_data="battle:start")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")]
     ])
-    await send_long(callback.message, text, reply_markup=kb)
+    await send_long(message, text, reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("fight_next:"))
+async def fight_next(callback: types.CallbackQuery):
+    try:
+        idx = int(callback.data.split(":", 1)[1])
+    except Exception:
+        await callback.answer("Ошибка выбора.", show_alert=True)
+        return
+    state = active_battles.get(callback.from_user.id)
+    if not state or idx not in state.get("remaining_player_indices", []):
+        await callback.answer("Этот боец уже недоступен.", show_alert=True)
+        return
+    await process_solo_fight_round(callback.message, callback.from_user, idx)
     await callback.answer()
 
 
@@ -1892,12 +2164,12 @@ async def fight_start(callback: types.CallbackQuery):
         starter_idx = int(callback.data.split(":", 1)[1])
     except Exception:
         starter_idx = 0
-    await resolve_solo_fight(callback, starter_idx)
+    await start_solo_fight(callback, starter_idx)
 
 
 @dp.callback_query(F.data == "fight")
 async def fight(callback: types.CallbackQuery):
-    await resolve_solo_fight(callback, 0)
+    await start_solo_fight(callback, 0)
 
 
 @dp.callback_query(F.data == "appeal")
@@ -2244,7 +2516,7 @@ async def process_pvp_pick(bid, idx, auto=False, callback_message=None, from_use
         return
 
     card = CARD_BY_ID[state["options"][idx]]
-    inst = make_instance(card)
+    inst = make_instance(card, card_level_for_user(current_uid, card["id"]))
     state["teams"][current_uid].append(inst)
 
     player = DATA.get("users", {}).get(str(current_uid))
@@ -2376,11 +2648,14 @@ async def resolve_pvp_battle(bid):
             DATA["users"][winner_uid]["battles"] = DATA["users"][winner_uid].get("battles", 0) + 1
             DATA["users"][winner_uid]["fistiks"] = DATA["users"][winner_uid].get("fistiks", 0) + 160
             add_xp(DATA["users"][winner_uid], 120)
+            add_pass_task_progress(DATA["users"][winner_uid], "battle", 1)
+            add_pass_task_progress(DATA["users"][winner_uid], "win", 1)
         if loser_uid in DATA["users"]:
             DATA["users"][loser_uid]["losses"] = DATA["users"][loser_uid].get("losses", 0) + 1
             DATA["users"][loser_uid]["battles"] = DATA["users"][loser_uid].get("battles", 0) + 1
             DATA["users"][loser_uid]["fistiks"] = DATA["users"][loser_uid].get("fistiks", 0) + 60
             add_xp(DATA["users"][loser_uid], 60)
+            add_pass_task_progress(DATA["users"][loser_uid], "battle", 1)
         state["scored"] = True
         save_json(DATA_FILE, DATA)
 
@@ -2759,8 +3034,47 @@ PASS_PREMIUM_REWARDS = {
 }
 
 
+PASS_DAILY_TASKS = {
+    "daily": {"title": "Забрать ежедневную награду", "target": 1, "pass_xp": 120},
+    "chest": {"title": "Открыть сундук", "target": 1, "pass_xp": 100},
+    "battle": {"title": "Сыграть бой", "target": 1, "pass_xp": 150},
+    "win": {"title": "Победить 1 раз", "target": 1, "pass_xp": 200},
+}
+
+
 def pass_level_from_xp(xp):
-    return max(1, int(xp or 0) // 250 + 1)
+    return max(1, min(100, int(xp or 0) // 250 + 1))
+
+
+def ensure_pass_daily(player):
+    today = date.today().isoformat()
+    if player.get("pass_daily_date") != today:
+        player["pass_daily_date"] = today
+        player["pass_task_progress"] = {}
+        player["pass_task_claimed"] = []
+    player.setdefault("pass_task_progress", {})
+    player.setdefault("pass_task_claimed", [])
+
+
+def add_pass_task_progress(player, key, amount=1):
+    ensure_pass_daily(player)
+    if key not in PASS_DAILY_TASKS:
+        return
+    progress = player.setdefault("pass_task_progress", {})
+    target = int(PASS_DAILY_TASKS[key]["target"])
+    progress[key] = min(target, int(progress.get(key, 0)) + int(amount))
+
+
+def format_pass_tasks(player):
+    ensure_pass_daily(player)
+    progress = player.get("pass_task_progress", {})
+    claimed = set(player.get("pass_task_claimed", []))
+    lines = []
+    for key, task in PASS_DAILY_TASKS.items():
+        done = min(int(progress.get(key, 0)), int(task["target"]))
+        mark = "✅" if key in claimed else ("🎯" if done >= task["target"] else "▫️")
+        lines.append(f"{mark} {task['title']}: {done}/{task['target']} → +{task['pass_xp']} очков")
+    return "\n".join(lines)
 
 
 def format_pass_rewards(rewards, claimed):
@@ -2807,28 +3121,44 @@ def grant_pass_reward(player, reward):
 
 async def send_multipass(message, user):
     p = get_user_data(user)
+    ensure_pass_daily(p)
+    if is_owner(user.id):
+        p["pass_premium"] = True
+        p["pass_xp"] = max(int(p.get("pass_xp", 0)), 25000)
     pass_level = pass_level_from_xp(p.get("pass_xp", 0))
     premium = "активен" if p.get("pass_premium") else "не куплен"
     free_claimed = set(map(str, p.get("claimed_pass_free", [])))
     premium_claimed = set(map(str, p.get("claimed_pass_premium", [])))
+    request_state = p.get("pass_purchase_request", "")
+    request_text = "нет"
+    if request_state == "pending":
+        request_text = "на подтверждении у создателя"
+    elif request_state == "approved":
+        request_text = "подтверждена, ожидается оплата"
+
     text = (
         "🎟 <b>Мультипасс</b>\n\n"
-        f"⭐ Уровень пропуска: <b>{pass_level}</b>\n"
+        f"⭐ Уровень пропуска: <b>{pass_level}/100</b>\n"
         f"📌 Очки пропуска: <b>{p.get('pass_xp', 0)}</b>\n"
-        f"👑 Премиум: <b>{premium}</b>\n\n"
-        "🎁 <b>Бесплатная линия</b>\n"
+        f"👑 Премиум: <b>{premium}</b>\n"
+        f"🧾 Заявка: <b>{request_text}</b>\n\n"
+        "🎯 <b>Ежедневные задания</b>\n"
+        f"{format_pass_tasks(p)}\n\n"
+        "🎁 <b>Награды за уровни</b>\n"
         f"{format_pass_rewards(PASS_FREE_REWARDS, free_claimed)}\n\n"
-        "👑 <b>Премиум-линия</b>\n"
+        "👑 <b>Премиум-награды</b>\n"
         f"{format_pass_rewards(PASS_PREMIUM_REWARDS, premium_claimed)}\n\n"
-        f"⭐ Премиум покупается за Telegram Stars: <b>{PASS_PRICE_STARS}</b> ⭐"
+        f"⭐ Премиум стоит <b>{PASS_PRICE_STARS}</b> Telegram Stars. Сначала заявка идёт создателю."
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Забрать бесплатные награды", callback_data="pass_claim:free")],
+    rows = [
+        [InlineKeyboardButton(text="🎯 Забрать очки за задания", callback_data="pass_claim_tasks")],
+        [InlineKeyboardButton(text="🎁 Забрать награды уровней", callback_data="pass_claim:free")],
         [InlineKeyboardButton(text="👑 Забрать премиум-награды", callback_data="pass_claim:premium")],
-        [InlineKeyboardButton(text=f"⭐ Купить премиум за {PASS_PRICE_STARS} Stars", callback_data="buy_pass_stars")],
-        [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
-    ])
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    ]
+    if not p.get("pass_premium") and not is_owner(user.id):
+        rows.append([InlineKeyboardButton(text=f"⭐ Запросить премиум за {PASS_PRICE_STARS} Stars", callback_data="buy_pass_stars")])
+    rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")])
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
 
 @dp.callback_query(F.data == "multipass")
@@ -2840,6 +3170,30 @@ async def multipass_cb(callback: types.CallbackQuery):
 @dp.message(Command("pass"))
 async def multipass_cmd(message: types.Message):
     await send_multipass(message, message.from_user)
+
+
+@dp.callback_query(F.data == "pass_claim_tasks")
+async def pass_claim_tasks(callback: types.CallbackQuery):
+    p = get_user_data(callback.from_user)
+    ensure_pass_daily(p)
+    progress = p.get("pass_task_progress", {})
+    claimed = set(p.setdefault("pass_task_claimed", []))
+    total = 0
+    lines = []
+    for key, task in PASS_DAILY_TASKS.items():
+        if key in claimed:
+            continue
+        if int(progress.get(key, 0)) >= int(task["target"]):
+            total += int(task["pass_xp"])
+            p["pass_task_claimed"].append(key)
+            lines.append(f"✅ {e(task['title'])}: +{task['pass_xp']} очков")
+    if total <= 0:
+        await callback.answer("Пока нет выполненных заданий.", show_alert=True)
+        return
+    p["pass_xp"] = int(p.get("pass_xp", 0)) + total
+    save_json(DATA_FILE, DATA)
+    await callback.message.answer("🎯 <b>Очки мультипасса получены</b>\n\n" + "\n".join(lines), reply_markup=back_menu(), parse_mode="HTML")
+    await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("pass_claim:"))
@@ -2872,19 +3226,91 @@ async def pass_claim(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "buy_pass_stars")
 async def buy_pass_stars(callback: types.CallbackQuery):
     p = get_user_data(callback.from_user)
-    if p.get("pass_premium") and not is_owner(callback.from_user.id):
+    if is_owner(callback.from_user.id):
+        p["pass_premium"] = True
+        p["pass_xp"] = max(int(p.get("pass_xp", 0)), 25000)
+        save_json(DATA_FILE, DATA)
+        await callback.answer("У владельца премиум уже открыт.", show_alert=True)
+        return
+    if p.get("pass_premium"):
         await callback.answer("Премиум уже активен.", show_alert=True)
         return
-    await bot.send_invoice(
-        chat_id=callback.from_user.id,
-        title="Премиум мультипасс",
-        description="Открывает премиум-линию наград мультипасса.",
-        payload=f"multipass_premium:{callback.from_user.id}",
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice(label="Премиум мультипасс", amount=PASS_PRICE_STARS)],
+    if p.get("pass_purchase_request") == "pending":
+        await callback.answer("Заявка уже на подтверждении.", show_alert=True)
+        return
+
+    p["pass_purchase_request"] = "pending"
+    save_json(DATA_FILE, DATA)
+
+    rows = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить покупку", callback_data=f"pass_request:approve:{callback.from_user.id}")],
+        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"pass_request:reject:{callback.from_user.id}")],
+    ])
+    owner_text = (
+        "⭐ <b>Заявка на премиум мультипасс</b>\n\n"
+        f"Игрок: <b>{e(p.get('name', callback.from_user.full_name))}</b>\n"
+        f"ID: <code>{callback.from_user.id}</code>\n"
+        f"Цена после подтверждения: <b>{PASS_PRICE_STARS}</b> Stars"
+    )
+    for oid in owner_ids():
+        try:
+            await bot.send_message(int(oid), owner_text, reply_markup=rows, parse_mode="HTML")
+        except Exception:
+            pass
+
+    await callback.message.answer(
+        "🧾 Заявка отправлена создателю. Статус: <b>на подтверждении</b>.\n"
+        "Если создатель примет заявку, бот пришлёт тебе счёт на Telegram Stars.",
+        reply_markup=back_menu(),
+        parse_mode="HTML"
     )
     await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("pass_request:"))
+async def pass_request_action(callback: types.CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Только создатель может подтверждать заявки.", show_alert=True)
+        return
+    try:
+        _, action, target_uid = callback.data.split(":")
+    except Exception:
+        await callback.answer("Ошибка заявки.", show_alert=True)
+        return
+    if target_uid not in DATA.get("users", {}):
+        await callback.answer("Игрок не найден.", show_alert=True)
+        return
+
+    p = DATA["users"][target_uid]
+    if action == "reject":
+        p["pass_purchase_request"] = "rejected"
+        save_json(DATA_FILE, DATA)
+        try:
+            await bot.send_message(int(target_uid), "❌ Заявка на премиум мультипасс отклонена создателем.", reply_markup=back_menu())
+        except Exception:
+            pass
+        await callback.message.answer("❌ Заявка отклонена.")
+        await callback.answer()
+        return
+
+    if action == "approve":
+        p["pass_purchase_request"] = "approved"
+        save_json(DATA_FILE, DATA)
+        try:
+            await bot.send_invoice(
+                chat_id=int(target_uid),
+                title="Премиум мультипасс",
+                description="Создатель подтвердил заявку. После оплаты откроется премиум-линия наград.",
+                payload=f"multipass_premium:{target_uid}",
+                provider_token="",
+                currency="XTR",
+                prices=[LabeledPrice(label="Премиум мультипасс", amount=PASS_PRICE_STARS)],
+            )
+            await callback.message.answer("✅ Заявка подтверждена. Счёт отправлен игроку.")
+        except Exception as ex:
+            await callback.message.answer(f"⚠️ Не удалось отправить счёт игроку: {e(ex)}")
+        await callback.answer()
+        return
 
 
 @dp.pre_checkout_query()
@@ -2898,6 +3324,7 @@ async def successful_payment(message: types.Message):
     if payload.startswith("multipass_premium:"):
         p = get_user_data(message.from_user)
         p["pass_premium"] = True
+        p["pass_purchase_request"] = "paid"
         p["stars_earned"] = int(p.get("stars_earned", 0)) + int(message.successful_payment.total_amount)
         save_json(DATA_FILE, DATA)
         await message.answer("👑 Премиум мультипасс активирован. Открой /pass и забери премиум-награды.", reply_markup=back_menu())
@@ -3018,6 +3445,7 @@ async def mega_buy(callback: types.CallbackQuery):
             pulled.add(card["id"])
             got.append((card, add_card(p, card["id"])))
     add_xp(p, 60 * amount)
+    add_pass_task_progress(p, "chest", amount)
     save_json(DATA_FILE, DATA)
     await send_pack_result(callback.message, f"Мега-открытие: {pack['name']} x{amount}", got, p)
     await callback.answer()
