@@ -42,6 +42,47 @@ PITY_LIMITS = {"epic": 10, "legendary": 50, "mythic": 150}
 CASE_NAMES = {"event": "Ивент-кейс", "holiday": "Праздничный кейс", "mystic": "Мифический кейс"}
 
 CURRENCY_TITLE = "✨ Эссенция мультивселенной"
+PROJECT_HOOK = "Собери свою аниме-команду и докажи, что твоя мультивселенная сильнее."
+
+STAR_PACKS = {
+    "epic_boost": {
+        "title": "Эпический старт",
+        "price": 99,
+        "desc": "Гарантированная эпическая карта, 3000 💎 и 2 ✨. Для быстрого старта без слома баланса.",
+        "rarity": "Эпический",
+        "fistiks": 3000,
+        "moon_coins": 2,
+        "badge": "EPIC_BOOSTER",
+    },
+    "legendary_rank": {
+        "title": "Легендарный ранг",
+        "price": 249,
+        "desc": "Гарантированная легендарная карта, 7000 💎, 7 ✨ и профильный знак.",
+        "rarity": "Легендарный",
+        "fistiks": 7000,
+        "moon_coins": 7,
+        "badge": "LEGEND_RANK",
+    },
+    "mythic_ticket": {
+        "title": "Мифический билет сезона",
+        "price": 499,
+        "desc": "Гарантированная мифическая карта сезона, 15000 💎, 15 ✨ и редкий знак.",
+        "rarity": "Мифический",
+        "fistiks": 15000,
+        "moon_coins": 15,
+        "badge": "MYTHIC_TICKET",
+    },
+}
+
+REF_MILESTONES = {
+    1: {"fistiks": 500, "pass_xp": 120, "moon_coins": 0, "title": "первый союзник"},
+    3: {"fistiks": 1200, "pass_xp": 250, "moon_coins": 2, "title": "малый отряд"},
+    5: {"fistiks": 2500, "pass_xp": 450, "moon_coins": 4, "title": "команда мультивселенной", "badge": "REF_5"},
+    10: {"fistiks": 6000, "pass_xp": 900, "moon_coins": 10, "title": "лидер союза", "badge": "REF_10"},
+    25: {"fistiks": 18000, "pass_xp": 1800, "moon_coins": 25, "title": "магнит мультивселенной", "badge": "REF_25"},
+}
+
+RAID_HIT_COOLDOWN_MINUTES = 30
 
 DAILY_EVENT_POOL = [
     {"name": "День шиноби", "desc": "Сыграй бой или открой сундук: сегодня энергия скрытых деревень усиливает прогресс.", "coins": 2, "pass_xp": 140},
@@ -245,6 +286,12 @@ BADGE_TITLES = {
     "EVENT_HUNTER": "⚡ Охотник ивентов",
     "PREMIUM": "👑 Премиум",
     "TESTER": "🧪 Тестер",
+    "EPIC_BOOSTER": "🟣 Эпический старт",
+    "LEGEND_RANK": "🟡 Легендарный ранг",
+    "MYTHIC_TICKET": "🔴 Мифический билет",
+    "REF_5": "👥 Командир друзей",
+    "REF_10": "🌐 Лидер союза",
+    "REF_25": "♾ Магнит мультивселенной",
 }
 
 CRAFT_COSTS = {
@@ -311,6 +358,17 @@ ARTIFACTS = [
     {"name": "Плащ анти-магии", "text": "снижает давление магических и проклятых техник", "delta": {"hax": 12, "durability": 10}},
     {"name": "Нэн-обет", "text": "опасный риск: сильнее удар, но дороже ошибка", "delta": {"power": 18, "iq": 8}},
     {"name": "Сфера пустоты", "text": "ломает дистанцию и открывает пространственный манёвр", "delta": {"hax": 18, "speed": 8}},
+    {"name": "Плащ Акацуки", "text": "скрывает намерения и даёт преимущество в первом обмене", "delta": {"iq": 10, "speed": 8}},
+    {"name": "Свиток запечатывания", "text": "коротко режет чужой хакс и контроль", "delta": {"hax": 16, "durability": 8}},
+    {"name": "Чистый Хогёку", "text": "даёт опасную адаптацию на грани поражения", "delta": {"hax": 20, "durability": 16}},
+    {"name": "Капсула Capsule Corp", "text": "быстро меняет темп и восстанавливает позицию команды", "delta": {"team": 14, "speed": 10}},
+    {"name": "Осколок Ники", "text": "поднимает волю, когда команда проигрывает по очкам", "delta": {"power": 16, "team": 16}},
+    {"name": "Метка Рикудо", "text": "стабилизирует чакру и повышает выживаемость", "delta": {"durability": 16, "hax": 12}},
+    {"name": "Проклятый палец", "text": "усиливает burst, но требует точного тайминга", "delta": {"power": 20, "hax": 8}},
+    {"name": "Клинок Ничирин", "text": "сильнее раскрывается против живучих противников", "delta": {"power": 14, "speed": 10}},
+    {"name": "Сердце дракона", "text": "команда выдерживает тяжёлый раунд лучше обычного", "delta": {"durability": 20, "team": 10}},
+    {"name": "Гримуар антимагии", "text": "ломает часть магических и проклятых техник", "delta": {"hax": 18, "iq": 8}},
+    {"name": "Фрагмент Омнитрикса", "text": "временно подбирает форму под противника", "delta": {"iq": 16, "power": 10, "hax": 10}},
 ]
 
 active_battles = {}
@@ -681,6 +739,10 @@ def get_user_data(user):
             "newbie_claimed": [],
             "newbie_progress": {},
             "pvp_team_source": "deck",
+            "ref_milestones_claimed": [],
+            "support_tickets": [],
+            "purchases": [],
+            "battle_history": [],
         }
         starter_ids = ["levi_peak", "mikasa", "kirito_alicization", "gon_base", "tanjiro_sun"]
         for sid in starter_ids:
@@ -701,6 +763,7 @@ def get_user_data(user):
         "deck": [], "auto_team": True, "pass_daily_date": "", "pass_task_progress": {},
         "pass_task_claimed": [], "pass_purchase_request": "", "created_at": now_iso,
         "newbie_claimed": [], "newbie_progress": {}, "pvp_team_source": "deck",
+        "ref_milestones_claimed": [], "support_tickets": [], "purchases": [], "battle_history": [],
     }
     for k, v in defaults.items():
         player.setdefault(k, v)
@@ -756,14 +819,15 @@ def main_menu_text(user=None):
         name = f", <b>{e(user.full_name)}</b>"
     return (
         f"🌌 <b>Anime Battle: Multiverse</b>{name}\n\n"
-        "Ты в главном центре бота. Сначала открой <b>Старт новичка</b>, если он доступен: там лёгкий путь, сундук, бой и первые очки пропуска.\n\n"
-        "🎮 <b>Режимы</b> — арены, PvP, рейды, турниры и колода.\n"
+        f"<b>{e(PROJECT_HOOK)}</b>\n\n"
+        "🎯 <b>Путь новичка:</b> бесплатный сундук → колода → бой → рейд → очки Боевого пропуска.\n"
+        "Каждый день есть причина зайти: сундук раз в 3 часа, задания дня, рейд-босс, PvP и награды сезона.\n\n"
+        "🎮 <b>Режимы</b> — арены, PvP, рейды и турниры.\n"
         "🃏 <b>Коллекция</b> — карты, фильтры, поиск, сила и описания.\n"
-        "📦 <b>Магазин / награды</b> — сундуки, кейсы, ежедневная награда, рейтинг, промокоды.\n"
-        "🎟 <b>Мультипасс</b> — ежедневные задания и сезонные награды.\n\n"
+        "📦 <b>Магазин / награды</b> — сундуки, кейсы, Stars-наборы, рейтинг и промокоды.\n"
+        "🎟 <b>Мультипасс</b> — ежедневные задания, бесплатная линия и premium за Stars.\n\n"
         "Выбери раздел ниже."
     )
-
 
 def back_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -786,18 +850,21 @@ def profile_menu(user_id=None):
 def shop_menu():
     rows = [
         [InlineKeyboardButton(text="🧰 Сундуки", callback_data="chests"), InlineKeyboardButton(text="✨ Кейсы", callback_data="cases")],
+        [InlineKeyboardButton(text="⭐ Stars-наборы", callback_data="stars_shop")],
         [InlineKeyboardButton(text="🎁 Награда", callback_data="daily"), InlineKeyboardButton(text="🏆 Рейтинг", callback_data="rating")],
         [InlineKeyboardButton(text="🎟 Промокод", callback_data="promo_help"), InlineKeyboardButton(text="🏷 Знаки", callback_data="badges_shop")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-
 def media_path(card_id):
-    for ext in [".gif", ".mp4", ".jpg", ".jpeg", ".png", ".webp"]:
-        p = MEDIA_DIR / f"{card_id}{ext}"
-        if p.exists():
-            return p
+    """Ищет медиа карты. Поддерживает старый формат media/id.jpg и новый media/cards/id.jpg."""
+    folders = [MEDIA_DIR / "cards_watermarked", MEDIA_DIR / "cards", MEDIA_DIR]
+    for folder in folders:
+        for ext in [".gif", ".mp4", ".jpg", ".jpeg", ".png", ".webp"]:
+            p = folder / f"{card_id}{ext}"
+            if p.exists():
+                return p
     return None
 
 
@@ -1492,6 +1559,20 @@ async def myid(message: types.Message):
     await message.answer(text, parse_mode="HTML", reply_markup=back_menu())
 
 
+@dp.message(Command("paysupport"))
+async def paysupport_cmd(message: types.Message):
+    get_user_data(message.from_user)
+    text = (
+        "🧾 <b>Помощь по оплатам</b>\n\n"
+        "Если Stars списались, а награда не пришла:\n"
+        "1. Скопируй дату и примерное время оплаты.\n"
+        "2. Напиши владельцу свой ID через /myid.\n"
+        "3. Укажи, что покупал: мультипасс или Stars-набор.\n\n"
+        "Владелец видит оплаты в админ-панели и может вручную проверить игрока."
+    )
+    await message.answer(text, reply_markup=back_menu(), parse_mode="HTML")
+
+
 @dp.message(Command("commands"))
 async def commands_cmd(message: types.Message):
     text = (
@@ -1975,6 +2056,71 @@ def odds_text(weights):
     return "\n".join(parts)
 
 
+
+def grant_ref_milestone(player, milestone):
+    reward = REF_MILESTONES.get(milestone)
+    if not reward:
+        return ""
+    player["fistiks"] = int(player.get("fistiks", 0)) + int(reward.get("fistiks", 0))
+    player["pass_xp"] = int(player.get("pass_xp", 0)) + int(reward.get("pass_xp", 0))
+    player["moon_coins"] = int(player.get("moon_coins", 0)) + int(reward.get("moon_coins", 0))
+    badge = reward.get("badge")
+    if badge:
+        player.setdefault("badges", [])
+        if badge not in player["badges"]:
+            player["badges"].append(badge)
+    return f"{reward.get('title', milestone)}: +{reward.get('fistiks',0)} 💎 +{reward.get('pass_xp',0)} очков pass +{reward.get('moon_coins',0)} ✨"
+
+
+def format_ref_milestones(player):
+    claimed = set(map(str, player.setdefault("ref_milestones_claimed", [])))
+    count = int(player.get("ref_count", 0))
+    lines = []
+    for milestone, reward in REF_MILESTONES.items():
+        mark = "✅" if str(milestone) in claimed else ("🎯" if count >= milestone else "▫️")
+        badge = f" + {badge_title(reward['badge'])}" if reward.get("badge") else ""
+        lines.append(
+            f"{mark} {milestone} друзей — {reward['title']} → {reward.get('fistiks',0)} 💎, {reward.get('pass_xp',0)} pass, {reward.get('moon_coins',0)} ✨{badge}"
+        )
+    return "\n".join(lines)
+
+
+def grant_star_pack_reward(player, pack_code):
+    pack = STAR_PACKS.get(pack_code)
+    if not pack:
+        return "Неизвестный набор."
+    rarity = pack["rarity"]
+    card = roll_card(weights={rarity: 1}, allowed_rarities=[rarity])
+    result = add_card(player, card["id"])
+    player["fistiks"] = int(player.get("fistiks", 0)) + int(pack.get("fistiks", 0))
+    player["moon_coins"] = int(player.get("moon_coins", 0)) + int(pack.get("moon_coins", 0))
+    player.setdefault("badges", [])
+    if pack.get("badge") and pack["badge"] not in player["badges"]:
+        player["badges"].append(pack["badge"])
+    player.setdefault("purchases", []).append({
+        "type": "star_pack",
+        "pack": pack_code,
+        "stars": pack["price"],
+        "card_id": card["id"],
+        "date": datetime.now().isoformat(),
+    })
+    return (
+        f"🎁 <b>{e(pack['title'])}</b>\n"
+        f"🐉 Карта: {rarity_label(card['rarity'])} <b>{e(card['name'])}</b>\n"
+        f"{e(result)}\n"
+        f"💎 +{pack.get('fistiks',0)} фисташек\n"
+        f"✨ +{pack.get('moon_coins',0)} эссенции\n"
+        f"🏷 {e(badge_title(pack.get('badge','')))}"
+    )
+
+
+async def notify_owner_purchase(user, text):
+    for oid in owner_ids():
+        try:
+            await bot.send_message(int(oid), text, parse_mode="HTML")
+        except Exception:
+            pass
+
 async def send_shop(message, user):
     p = get_user_data(user)
     await message.answer(
@@ -2016,6 +2162,51 @@ async def shop_cmd(message: types.Message):
 @dp.callback_query(F.data == "shop")
 async def shop_cb(callback: types.CallbackQuery):
     await send_shop(callback.message, callback.from_user)
+    await callback.answer()
+
+
+async def send_stars_shop(message, user):
+    p = get_user_data(user)
+    text = (
+        "⭐ <b>Stars-наборы</b>\n\n"
+        "Это платные гарантированные наборы без грязного рандома. Они ускоряют старт, но не превращают игру в pay-to-win.\n\n"
+    )
+    rows = []
+    for code, pack in STAR_PACKS.items():
+        text += f"<b>{pack['price']} Stars — {e(pack['title'])}</b>\n{e(pack['desc'])}\n\n"
+        rows.append([InlineKeyboardButton(text=f"⭐ {pack['price']} — {pack['title']}", callback_data=f"buy_star_pack:{code}")])
+    text += "После оплаты награда выдаётся автоматически, а владелец получает уведомление о покупке."
+    rows.append([InlineKeyboardButton(text="⬅️ Магазин / награды", callback_data="shop")])
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "stars_shop")
+async def stars_shop_cb(callback: types.CallbackQuery):
+    await send_stars_shop(callback.message, callback.from_user)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("buy_star_pack:"))
+async def buy_star_pack_cb(callback: types.CallbackQuery):
+    code = callback.data.split(":", 1)[1]
+    pack = STAR_PACKS.get(code)
+    if not pack:
+        await callback.answer("Набор не найден.", show_alert=True)
+        return
+    get_user_data(callback.from_user)
+    try:
+        await bot.send_invoice(
+            chat_id=callback.from_user.id,
+            title=pack["title"],
+            description=pack["desc"],
+            payload=f"star_pack:{code}:{callback.from_user.id}",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label=pack["title"], amount=int(pack["price"]))],
+        )
+        await callback.message.answer("⭐ Счёт отправлен. После оплаты набор выдастся автоматически.", reply_markup=back_menu())
+    except Exception as ex:
+        await callback.message.answer(f"⚠️ Не удалось отправить счёт: {e(ex)}", reply_markup=back_menu())
     await callback.answer()
 
 
@@ -2297,19 +2488,20 @@ async def card_detail(callback: types.CallbackQuery):
         media_hint = f"media/{cid}.gif или media/{cid}.jpg"
         owner_hint = f"\n\n🖼 Файл медиа: <code>{e(media_hint)}</code>"
     text = (
-        f"🐉 <b>{e(c['name'])}</b>\n\n"
-        f"⭐ Редкость: {rarity_label(c['rarity'])}\n"
-        f"⚔️ Сила: <b>{card_power(c, level)}</b>\n"
-        f"🎭 Форма: {e(c.get('form',''))}\n"
-        f"🌍 Аниме: {e(c.get('anime',''))}\n"
-        f"🧩 Роль: {e(c.get('role',''))}\n"
-        f"📈 Уровень: <b>{level}/{MAX_LEVEL}</b>\n"
-        f"🧩 Фрагменты: <b>{info.get('shards',0)}</b>\n"
+        f"🌌 <b>{e(c['name'])}</b>\n"
+        f"<blockquote>{e(c.get('description', 'Описание скоро будет обновлено.'))}</blockquote>\n\n"
+        f"{rarity_label(c['rarity'])}\n"
+        f"⚔️ <b>Сила:</b> {card_power(c, level)}\n"
+        f"🎭 <b>Форма:</b> {e(c.get('form',''))}\n"
+        f"🌍 <b>Аниме:</b> {e(c.get('anime',''))}\n"
+        f"🧩 <b>Роль:</b> {e(c.get('role',''))}\n"
+        f"📈 <b>Уровень:</b> {level}/{MAX_LEVEL}\n"
+        f"🧩 <b>Фрагменты:</b> {info.get('shards',0)}\n"
         f"📌 {e(next_text)}\n\n"
-        f"📖 <b>Описание:</b> {e(c.get('description', ''))}\n\n"
         f"⚡ <b>Способности:</b> {e(c.get('abilities',''))}\n"
         f"➕ <b>Плюс:</b> {e(c.get('plus',''))}\n"
-        f"➖ <b>Минус:</b> {e(c.get('minus',''))}"
+        f"➖ <b>Минус:</b> {e(c.get('minus',''))}\n\n"
+        f"🏮 <b>Очки карты:</b> {card_power(c, level) * 10 + level * 25}"
         f"{owner_hint}"
     )
     rows = []
@@ -2994,7 +3186,7 @@ async def friends_cmd(message: types.Message):
 
 
 async def send_friends_menu(message, user):
-    get_user_data(user)
+    p = get_user_data(user)
     uid = str(user.id)
     friends_list = DATA.setdefault("friends", {}).get(uid, [])
     lines = []
@@ -3020,12 +3212,16 @@ async def send_friends_menu(message, user):
             ])
     rows.append([InlineKeyboardButton(text="🌐 Найти онлайн-бой", callback_data="online_search")])
     rows.append([InlineKeyboardButton(text="🔗 Реферальная ссылка", callback_data="friend_link")])
+    rows.append([InlineKeyboardButton(text="🎁 Забрать реферальные вехи", callback_data="ref_claim")])
     rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")])
     text = (
-        "👥 <b>Друзья</b>\n\n"
+        "👥 <b>Друзья и рефералка</b>\n\n"
         + "\n".join(lines)
         + "\n\nЧтобы отправить заявку, напиши:\n<code>/addfriend ID</code>\n\n"
-        + "За приглашённого друга: +500 💎 тебе и +300 💎 другу."
+        + f"Приглашено друзей: <b>{int(p.get('ref_count', 0))}</b>\n"
+        + "Друг засчитывается честно: он должен зайти по ссылке и начать пользоваться ботом.\n\n"
+        + "<b>Вехи приглашений:</b>\n"
+        + format_ref_milestones(p)
     )
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
@@ -3745,6 +3941,11 @@ async def challenge_decline(callback: types.CallbackQuery):
     await callback.answer()
 
 
+@dp.message(Command("ref"))
+async def ref_cmd(message: types.Message):
+    await send_friends_menu(message, message.from_user)
+
+
 @dp.callback_query(F.data == "friend_link")
 async def friend_link(callback: types.CallbackQuery):
     code = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
@@ -3753,6 +3954,25 @@ async def friend_link(callback: types.CallbackQuery):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=friend_{code}"
     await callback.message.answer(f"🔗 Ссылка для друга:\n{link}")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "ref_claim")
+async def ref_claim_cb(callback: types.CallbackQuery):
+    p = get_user_data(callback.from_user)
+    claimed = set(map(str, p.setdefault("ref_milestones_claimed", [])))
+    count = int(p.get("ref_count", 0))
+    lines = []
+    for milestone in sorted(REF_MILESTONES):
+        if count >= milestone and str(milestone) not in claimed:
+            txt = grant_ref_milestone(p, milestone)
+            p["ref_milestones_claimed"].append(str(milestone))
+            lines.append("✅ " + e(txt))
+    if not lines:
+        await callback.answer("Пока нет новых реферальных наград.", show_alert=True)
+        return
+    save_json(DATA_FILE, DATA)
+    await callback.message.answer("🎁 <b>Реферальные награды получены</b>\n\n" + "\n".join(lines), reply_markup=back_menu(), parse_mode="HTML")
     await callback.answer()
 
 
@@ -4114,8 +4334,8 @@ async def raid_hit_cb(callback: types.CallbackQuery):
     last = p.get("last_raid_hit", "")
     if last:
         try:
-            if now < datetime.fromisoformat(last) + timedelta(hours=4):
-                mins = int(((datetime.fromisoformat(last) + timedelta(hours=4)) - now).total_seconds() // 60) + 1
+            if now < datetime.fromisoformat(last) + timedelta(minutes=RAID_HIT_COOLDOWN_MINUTES):
+                mins = int(((datetime.fromisoformat(last) + timedelta(minutes=RAID_HIT_COOLDOWN_MINUTES)) - now).total_seconds() // 60) + 1
                 await callback.answer(f"Рейд-удар доступен через {mins} мин.", show_alert=True)
                 return
         except Exception:
@@ -4691,6 +4911,30 @@ async def successful_payment(message: types.Message):
         await message.answer(
             "✅ Оплата получена. Заявка отправлена создателю. После проверки он подтвердит премиум-доступ.",
             reply_markup=back_menu()
+        )
+    elif payload.startswith("star_pack:"):
+        parts = payload.split(":")
+        pack_code = parts[1] if len(parts) > 1 else ""
+        p = get_user_data(message.from_user)
+        pack = STAR_PACKS.get(pack_code)
+        if not pack:
+            await message.answer("✅ Платёж получен, но набор не найден. Напиши /paysupport.", reply_markup=back_menu())
+            return
+        p["stars_earned"] = int(p.get("stars_earned", 0)) + int(message.successful_payment.total_amount)
+        reward_text = grant_star_pack_reward(p, pack_code)
+        save_json(DATA_FILE, DATA)
+        await message.answer(
+            "✅ <b>Оплата получена. Набор выдан.</b>\n\n" + reward_text,
+            reply_markup=back_menu(),
+            parse_mode="HTML"
+        )
+        await notify_owner_purchase(
+            message.from_user,
+            "⭐ <b>Покупка Stars-набора</b>\n\n"
+            f"Игрок: <b>{e(p.get('name', message.from_user.full_name))}</b>\n"
+            f"ID: <code>{message.from_user.id}</code>\n"
+            f"Набор: <b>{e(pack['title'])}</b>\n"
+            f"Stars: <b>{message.successful_payment.total_amount}</b>"
         )
     else:
         await message.answer("✅ Платёж получен.")
