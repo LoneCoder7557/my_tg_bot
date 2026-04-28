@@ -1,10 +1,12 @@
 
 import asyncio
 import json
+import logging
 import os
 import random
 import string
 import sqlite3
+import tempfile
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from html import escape
@@ -28,6 +30,16 @@ PROMO_FILE = "promo_codes.json"
 OWNER_FILE = "owner_ids.txt"
 RIGHT_HAND_FILE = "right_hand_ids.txt"
 MEDIA_DIR = Path("media")
+LOG_FILE = "bot_runtime.log"
+ONLINE_QUEUE_TTL_SECONDS = 5 * 60
+PAYMENT_CURRENCY = "XTR"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8"), logging.StreamHandler()],
+)
+logger = logging.getLogger("anime_multiverse_bot")
 
 MAX_LEVEL = 100
 CARD_UNLOCK_FRAGMENTS = 100
@@ -374,6 +386,7 @@ ARTIFACTS = [
 active_battles = {}
 active_pvp = {}
 choice_timers = {}
+# items: {"uid": str, "joined_at": iso}; legacy str items are also accepted.
 online_queue = []
 
 
@@ -384,44 +397,86 @@ def e(text):
 def load_json(path, default):
     p = Path(path)
     if not p.exists():
-        p.write_text(json.dumps(default, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_json(path, default)
         return default
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as ex:
+        logger.exception("Cannot read JSON %s: %s", path, ex)
+        bak = p.with_suffix(p.suffix + ".bak")
+        if bak.exists():
+            try:
+                return json.loads(bak.read_text(encoding="utf-8"))
+            except Exception as bak_ex:
+                logger.exception("Cannot read JSON backup %s: %s", bak, bak_ex)
         return default
 
 
 def _save_data_sqlite(obj):
     """Основное хранилище прогресса: SQLite. JSON остаётся как читаемый backup."""
+    con = None
     try:
-        con = sqlite3.connect(DATA_DB_FILE)
+        con = sqlite3.connect(DATA_DB_FILE, timeout=30)
+        con.execute("PRAGMA journal_mode=WAL")
         con.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)")
         con.execute(
             "INSERT OR REPLACE INTO kv(key, value, updated_at) VALUES (?, ?, ?)",
             ("data", json.dumps(obj, ensure_ascii=False), datetime.now().isoformat()),
         )
         con.commit()
-        con.close()
-    except Exception:
-        pass
+    except Exception as ex:
+        logger.exception("SQLite save failed: %s", ex)
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
 
 
 def _load_data_sqlite():
+    con = None
     try:
-        con = sqlite3.connect(DATA_DB_FILE)
+        con = sqlite3.connect(DATA_DB_FILE, timeout=30)
         con.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)")
         row = con.execute("SELECT value FROM kv WHERE key='data'").fetchone()
-        con.close()
         if row and row[0]:
             return json.loads(row[0])
-    except Exception:
+    except Exception as ex:
+        logger.exception("SQLite load failed: %s", ex)
         return None
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
     return None
 
 
 def save_json(path, obj):
-    Path(path).write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    """Атомарная запись JSON, чтобы прогресс не ломался при падении процесса."""
+    path_obj = Path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(obj, ensure_ascii=False, indent=2)
+    tmp_name = None
+    try:
+        if path_obj.exists() and str(path) == DATA_FILE:
+            bak = path_obj.with_suffix(path_obj.suffix + ".bak")
+            try:
+                bak.write_text(path_obj.read_text(encoding="utf-8"), encoding="utf-8")
+            except Exception as ex:
+                logger.warning("Could not refresh data backup: %s", ex)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path_obj.parent), prefix=path_obj.name + ".tmp.") as tmp:
+            tmp.write(text)
+            tmp_name = tmp.name
+        os.replace(tmp_name, path_obj)
+    finally:
+        if tmp_name and Path(tmp_name).exists():
+            try:
+                Path(tmp_name).unlink()
+            except Exception:
+                pass
     if str(path) == DATA_FILE:
         _save_data_sqlite(obj)
 
@@ -582,8 +637,8 @@ class AutoCleanCallbackMiddleware(BaseMiddleware):
                     data_value in delete_exact or data_value.startswith(delete_prefixes)
                 ):
                     await event.message.delete()
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.debug("Auto-clean failed: %s", ex)
         return await handler(event, data)
 
 
@@ -597,8 +652,8 @@ class UserTouchMiddleware(BaseMiddleware):
             user = getattr(event, "from_user", None)
             if user:
                 get_user_data(user)
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.debug("User touch failed: %s", ex)
         return await handler(event, data)
 
 
@@ -742,6 +797,7 @@ def get_user_data(user):
             "ref_milestones_claimed": [],
             "support_tickets": [],
             "purchases": [],
+            "processed_payments": [],
             "battle_history": [],
         }
         starter_ids = ["levi_peak", "mikasa", "kirito_alicization", "gon_base", "tanjiro_sun"]
@@ -763,7 +819,7 @@ def get_user_data(user):
         "deck": [], "auto_team": True, "pass_daily_date": "", "pass_task_progress": {},
         "pass_task_claimed": [], "pass_purchase_request": "", "created_at": now_iso,
         "newbie_claimed": [], "newbie_progress": {}, "pvp_team_source": "deck",
-        "ref_milestones_claimed": [], "support_tickets": [], "purchases": [], "battle_history": [],
+        "ref_milestones_claimed": [], "support_tickets": [], "purchases": [], "processed_payments": [], "battle_history": [],
     }
     for k, v in defaults.items():
         player.setdefault(k, v)
@@ -871,46 +927,103 @@ def media_path(card_id):
 def make_card_banner(card_id):
     if Image is None or ImageDraw is None or ImageFont is None or card_id not in CARD_BY_ID:
         return None
+    c = CARD_BY_ID[card_id]
+    # Мифики оставлены без автокартинки: туда владелец кладёт свои GIF/MP4 вручную.
+    if c.get("rarity") == "Мифический":
+        return None
     out_dir = MEDIA_DIR / "generated_cards"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{card_id}.png"
     if out.exists():
         return out
-    c = CARD_BY_ID[card_id]
+
+    rng = random.Random(card_id)
+    rarity = c.get("rarity", "Обычный")
+    role = (c.get("role") or "").lower()
+    form = (c.get("form") or "").lower()
     colors = {
-        "Обычный": ((48, 52, 62), (128, 132, 145)),
-        "Редкий": ((20, 56, 120), (55, 150, 255)),
-        "Эпический": ((80, 22, 120), (185, 86, 255)),
-        "Легендарный": ((110, 72, 10), (255, 191, 55)),
-        "Мифический": ((120, 12, 35), (255, 55, 105)),
+        "Обычный": ((35, 38, 48), (98, 105, 120), (210, 216, 230)),
+        "Редкий": ((12, 34, 84), (38, 125, 235), (160, 215, 255)),
+        "Эпический": ((52, 12, 88), (150, 58, 230), (228, 175, 255)),
+        "Легендарный": ((92, 55, 6), (245, 170, 42), (255, 239, 155)),
+        "Мифический": ((90, 5, 25), (235, 38, 94), (255, 160, 190)),
     }
-    top, bottom = colors.get(c.get("rarity", "Обычный"), colors["Обычный"])
+    top, bottom, accent = colors.get(rarity, colors["Обычный"])
     w, h = 900, 1200
     img = Image.new("RGB", (w, h), top)
     draw = ImageDraw.Draw(img)
+
     for y in range(h):
         t = y / h
-        col = tuple(int(top[i] * (1 - t) + bottom[i] * t) for i in range(3))
+        wave = 0.08 * rng.random()
+        col = tuple(int(top[i] * (1 - t) + bottom[i] * t + accent[i] * wave) for i in range(3))
         draw.line([(0, y), (w, y)], fill=col)
-    # Космические круги/энергия — нейтральный баннер, без чужих изображений.
-    for _ in range(55):
-        x = random.randint(-100, w)
-        y = random.randint(-100, h)
-        r = random.randint(2, 18)
-        draw.ellipse((x, y, x + r, y + r), fill=(255, 255, 255))
-    for off in [0, 30, 60]:
-        draw.ellipse((80-off, 110-off, w-80+off, h-250+off), outline=(255,255,255), width=3)
+
+    keywords = role + " " + form
+    icon = "✦"
+    if any(x in keywords for x in ["меч", "клин", "самурай"]):
+        icon, motif = "⚔", "blade"
+    elif any(x in keywords for x in ["маг", "хакс", "простран", "демон", "прокля"]):
+        icon, motif = "✺", "arcane"
+    elif any(x in keywords for x in ["скор", "ассас", "рывок"]):
+        icon, motif = "➤", "speed"
+    elif any(x in keywords for x in ["саппорт", "команд", "медик", "защ"]):
+        icon, motif = "⬢", "support"
+    elif any(x in keywords for x in ["танк", "гигант", "сила", "физ"]):
+        icon, motif = "◆", "power"
+    else:
+        motif = "aura"
+
+    for _ in range(90):
+        x = rng.randint(-80, w + 80)
+        y = rng.randint(-80, h + 80)
+        r = rng.randint(2, 16)
+        a = rng.randint(80, 210)
+        fill = tuple(min(255, int(accent[i] * a / 210)) for i in range(3))
+        draw.ellipse((x, y, x + r, y + r), fill=fill)
+
+    if motif == "blade":
+        for x in range(-350, w, 180):
+            draw.line((x, h - 110, x + 720, 120), fill=accent, width=5)
+    elif motif == "speed":
+        for y in range(130, h - 170, 80):
+            draw.line((60, y, w - 60, y - rng.randint(20, 70)), fill=accent, width=4)
+    elif motif == "arcane":
+        for off in [0, 38, 76, 114]:
+            draw.ellipse((100-off, 130-off, w-100+off, h-260+off), outline=accent, width=4)
+    elif motif == "support":
+        for x in range(95, w, 150):
+            draw.polygon([(x, 210), (x + 70, 250), (x + 70, 330), (x, 370), (x - 70, 330), (x - 70, 250)], outline=accent)
+    elif motif == "power":
+        for _ in range(12):
+            x = rng.randint(40, w - 140)
+            y = rng.randint(120, h - 360)
+            draw.rectangle((x, y, x + rng.randint(80, 190), y + rng.randint(18, 44)), outline=accent, width=4)
+    else:
+        for off in [0, 28, 56]:
+            draw.ellipse((80-off, 115-off, w-80+off, h-260+off), outline=accent, width=3)
+
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    od.rounded_rectangle((35, 45, w - 35, h - 45), radius=42, outline=accent + (230,), width=6)
+    od.rounded_rectangle((55, 260, w - 55, h - 200), radius=36, fill=(0, 0, 0, 84), outline=(255, 255, 255, 90), width=2)
+    od.rectangle((0, h - 170, w, h), fill=(0, 0, 0, 210))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
     try:
         font_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 62)
-        font_mid = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 38)
-        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+        font_mid = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 29)
+        font_icon = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 120)
     except Exception:
-        font_big = font_mid = font_small = ImageFont.load_default()
+        font_big = font_mid = font_small = font_icon = ImageFont.load_default()
+
     def wrap(txt, max_len):
         words = str(txt).split()
         lines, cur = [], ""
         for word in words:
-            if len(cur + " " + word) <= max_len:
+            if len((cur + " " + word).strip()) <= max_len:
                 cur = (cur + " " + word).strip()
             else:
                 if cur:
@@ -919,20 +1032,27 @@ def make_card_banner(card_id):
         if cur:
             lines.append(cur)
         return lines[:4]
-    y = 350
+
+    draw.text((70, 95), icon, font=font_icon, fill=accent, stroke_width=4, stroke_fill=(0, 0, 0))
+    draw.text((w - 340, 95), rarity.upper(), font=font_mid, fill=accent, stroke_width=2, stroke_fill=(0, 0, 0))
+    y = 325
     for line in wrap(c.get("name", card_id), 18):
-        draw.text((60, y), line, font=font_big, fill=(255,255,255), stroke_width=3, stroke_fill=(0,0,0))
-        y += 70
-    y += 15
-    draw.text((60, y), f"{c.get('rarity','')} • {c.get('anime','')}", font=font_mid, fill=(255,238,170), stroke_width=2, stroke_fill=(0,0,0))
-    y += 55
+        draw.text((82, y), line, font=font_big, fill=(255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0))
+        y += 72
+    y += 10
+    draw.text((82, y), f"{c.get('anime','')}", font=font_mid, fill=accent, stroke_width=2, stroke_fill=(0, 0, 0))
+    y += 54
     for line in wrap(c.get("form", "Базовая форма"), 30):
-        draw.text((60, y), line, font=font_small, fill=(235,245,255), stroke_width=2, stroke_fill=(0,0,0))
+        draw.text((82, y), line, font=font_small, fill=(235, 245, 255), stroke_width=2, stroke_fill=(0, 0, 0))
+        y += 40
+    y += 10
+    for line in wrap(c.get("role", "боевой стиль"), 32)[:2]:
+        draw.text((82, y), line, font=font_small, fill=(230, 230, 235), stroke_width=2, stroke_fill=(0, 0, 0))
         y += 38
-    draw.rectangle((0, h-150, w, h), fill=(0,0,0))
-    draw.text((55, h-120), "ANIME BATTLE MULTIVERSE", font=font_mid, fill=(255,255,255))
-    draw.text((55, h-70), "Полное описание смотри в коллекции", font=font_small, fill=(210,210,230))
-    img.save(out)
+
+    draw.text((55, h - 130), "ANIME BATTLE MULTIVERSE", font=font_mid, fill=(255, 255, 255))
+    draw.text((55, h - 82), f"ID: {card_id}", font=font_small, fill=(210, 210, 230))
+    img.save(out, optimize=True, quality=90)
     return out
 
 
@@ -1080,17 +1200,23 @@ def roll_card_with_pity(player, weights=None, exclude=None):
     for k in ["epic", "legendary", "mythic"]:
         pity[k] = int(pity.get(k, 0))
 
+    def _rarity_available(rarity):
+        if not weights:
+            return True
+        return int(weights.get(rarity, 0) or 0) > 0
+
     forced = None
     note = ""
-    if pity["mythic"] + 1 >= PITY_LIMITS["mythic"]:
+    if pity["mythic"] + 1 >= PITY_LIMITS["mythic"] and _rarity_available("Мифический"):
         forced = "Мифический"
         note = "\n🎯 Сработал гарант мифической редкости."
-    elif pity["legendary"] + 1 >= PITY_LIMITS["legendary"]:
+    elif pity["legendary"] + 1 >= PITY_LIMITS["legendary"] and _rarity_available("Легендарный"):
         forced = "Легендарный"
         note = "\n🎯 Сработал гарант легендарной редкости."
-    elif pity["epic"] + 1 >= PITY_LIMITS["epic"]:
+    elif pity["epic"] + 1 >= PITY_LIMITS["epic"] and _rarity_available("Эпический"):
         forced = "Эпический"
         note = "\n🎯 Сработал гарант эпической редкости."
+
 
     if forced:
         card = roll_card(weights={forced: 1}, exclude=exclude, allowed_rarities=[forced])
@@ -4202,8 +4328,8 @@ def ensure_raid_state():
 
 def pick_raid_boss_deck():
     pool = [c for c in CARDS if c.get("rarity") in {"Эпический", "Легендарный", "Мифический"}]
-    random.seed(int(date.today().strftime("%Y%m%d")))
-    random.shuffle(pool)
+    rng = random.Random(int(date.today().strftime("%Y%m%d")))
+    rng.shuffle(pool)
     return [c["id"] for c in pool[:5]]
 
 
@@ -4805,20 +4931,20 @@ async def buy_pass_stars(callback: types.CallbackQuery):
         await callback.answer("Премиум уже активен.", show_alert=True)
         return
     if p.get("pass_purchase_request") == "paid_pending":
-        await callback.answer("Оплата уже получена. Жди подтверждения создателя.", show_alert=True)
+        await callback.answer("Оплата уже получена. Если premium не открылся, напиши /paysupport.", show_alert=True)
         return
     try:
         await bot.send_invoice(
             chat_id=callback.from_user.id,
             title="Премиум мультипасс",
-            description="Премиум мультипасс за Telegram Stars. После оплаты создатель подтверждает доступ к premium-наградам до 100 уровня.",
+            description="Премиум мультипасс за Telegram Stars. После оплаты premium-награды до 100 уровня открываются автоматически.",
             payload=f"multipass_premium:{callback.from_user.id}",
             provider_token="",
             currency="XTR",
             prices=[LabeledPrice(label="Премиум мультипасс", amount=PASS_PRICE_STARS)],
         )
         await callback.message.answer(
-            "⭐ Счёт отправлен. После оплаты заявка уйдёт владельцу. Обычно подтверждается доступ до 100 уровня premium-наград.",
+            "⭐ Счёт отправлен. После оплаты premium-награды до 100 уровня откроются автоматически.",
             reply_markup=back_menu(),
             parse_mode="HTML"
         )
@@ -4873,55 +4999,126 @@ async def pass_paid_action(callback: types.CallbackQuery):
         return
 
 
+def parse_payment_payload(payload):
+    parts = str(payload or "").split(":")
+    if len(parts) == 2 and parts[0] == "multipass_premium" and parts[1].isdigit():
+        return {"kind": "multipass", "user_id": parts[1], "code": "multipass_premium"}
+    if len(parts) == 3 and parts[0] == "star_pack" and parts[2].isdigit():
+        return {"kind": "star_pack", "user_id": parts[2], "code": parts[1]}
+    return None
+
+
+def expected_payment_amount(payload):
+    parsed = parse_payment_payload(payload)
+    if not parsed:
+        return None
+    if parsed["kind"] == "multipass":
+        return int(PASS_PRICE_STARS)
+    if parsed["kind"] == "star_pack":
+        pack = STAR_PACKS.get(parsed["code"])
+        return int(pack["price"]) if pack else None
+    return None
+
+
+def payment_id_from_successful(successful_payment):
+    return (
+        getattr(successful_payment, "telegram_payment_charge_id", "")
+        or getattr(successful_payment, "provider_payment_charge_id", "")
+        or f"{successful_payment.invoice_payload}:{successful_payment.total_amount}"
+    )
+
+
+def payment_already_processed(player, payment_id):
+    if not payment_id:
+        return False
+    return payment_id in set(map(str, player.setdefault("processed_payments", [])))
+
+
+def record_payment(player, payment_id, kind, code, amount):
+    player.setdefault("processed_payments", [])
+    if payment_id and payment_id not in player["processed_payments"]:
+        player["processed_payments"].append(payment_id)
+        player["processed_payments"] = player["processed_payments"][-80:]
+    player.setdefault("purchases", []).append({
+        "id": payment_id,
+        "kind": kind,
+        "code": code,
+        "amount": int(amount),
+        "currency": PAYMENT_CURRENCY,
+        "created_at": datetime.now().isoformat(),
+    })
+    player["purchases"] = player["purchases"][-120:]
+    player["stars_earned"] = int(player.get("stars_earned", 0)) + int(amount)
+
+
 @dp.pre_checkout_query()
 async def pre_checkout_query(pre_checkout: types.PreCheckoutQuery):
+    payload = pre_checkout.invoice_payload
+    parsed = parse_payment_payload(payload)
+    expected = expected_payment_amount(payload)
+    if not parsed or expected is None:
+        await pre_checkout.answer(ok=False, error_message="Неизвестный платёж. Открой счёт заново из бота.")
+        return
+    if parsed["user_id"] != str(pre_checkout.from_user.id):
+        await pre_checkout.answer(ok=False, error_message="Этот счёт создан для другого игрока.")
+        return
+    if pre_checkout.currency != PAYMENT_CURRENCY or int(pre_checkout.total_amount) != expected:
+        await pre_checkout.answer(ok=False, error_message="Цена платежа не совпала. Открой счёт заново.")
+        return
     await pre_checkout.answer(ok=True)
 
 
 @dp.message(F.successful_payment)
 async def successful_payment(message: types.Message):
-    payload = message.successful_payment.invoice_payload
-    if payload.startswith("multipass_premium:"):
-        p = get_user_data(message.from_user)
-        p["pass_purchase_request"] = "paid_pending"
-        p["pass_premium"] = False
-        p["pass_premium_cap"] = 0
-        p["stars_earned"] = int(p.get("stars_earned", 0)) + int(message.successful_payment.total_amount)
-        save_json(DATA_FILE, DATA)
+    payment = message.successful_payment
+    payload = payment.invoice_payload
+    parsed = parse_payment_payload(payload)
+    expected = expected_payment_amount(payload)
+    p = get_user_data(message.from_user)
+    if not parsed or expected is None:
+        await message.answer("✅ Платёж получен, но payload неизвестен. Напиши /paysupport.", reply_markup=back_menu())
+        return
+    if parsed["user_id"] != str(message.from_user.id) or payment.currency != PAYMENT_CURRENCY or int(payment.total_amount) != expected:
+        await message.answer("⚠️ Платёж получен, но проверка суммы/игрока не прошла. Напиши /paysupport.", reply_markup=back_menu())
+        logger.warning("Payment validation failed user=%s payload=%s amount=%s currency=%s", message.from_user.id, payload, payment.total_amount, payment.currency)
+        return
 
-        rows = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Открыть до 20 уровня", callback_data=f"pass_paid:approve:{message.from_user.id}:20")],
-            [InlineKeyboardButton(text="✅ Открыть до 50 уровня", callback_data=f"pass_paid:approve:{message.from_user.id}:50")],
-            [InlineKeyboardButton(text="✅ Открыть до 100 уровня", callback_data=f"pass_paid:approve:{message.from_user.id}:100")],
-            [InlineKeyboardButton(text="⚠️ Заморозить/отклонить", callback_data=f"pass_paid:reject:{message.from_user.id}:0")],
-        ])
-        owner_text = (
-            "⭐ <b>Оплачен премиум мультипасс</b>\n\n"
+    pay_id = payment_id_from_successful(payment)
+    if payment_already_processed(p, pay_id):
+        await message.answer("✅ Этот платёж уже обработан. Повторная выдача не нужна.", reply_markup=back_menu())
+        return
+
+    if parsed["kind"] == "multipass":
+        p["pass_purchase_request"] = "activated"
+        p["pass_premium"] = True
+        p["pass_premium_cap"] = 100
+        if "PREMIUM" not in p.setdefault("badges", []):
+            p["badges"].append("PREMIUM")
+        record_payment(p, pay_id, "multipass", parsed["code"], payment.total_amount)
+        save_json(DATA_FILE, DATA)
+        await message.answer(
+            "✅ <b>Премиум мультипасс активирован.</b>\n\nОткрыты premium-награды до <b>100 уровня</b>.",
+            reply_markup=back_menu(),
+            parse_mode="HTML"
+        )
+        await notify_owner_purchase(
+            message.from_user,
+            "⭐ <b>Автоактивация премиум мультипасса</b>\n\n"
             f"Игрок: <b>{e(p.get('name', message.from_user.full_name))}</b>\n"
             f"ID: <code>{message.from_user.id}</code>\n"
-            f"Оплачено: <b>{message.successful_payment.total_amount}</b> Stars\n\n"
-            "Проверь поступление Stars и выбери, до какого уровня открыть премиум."
+            f"Stars: <b>{payment.total_amount}</b>\n"
+            f"Payment ID: <code>{e(pay_id)}</code>"
         )
-        for oid in owner_ids():
-            try:
-                await bot.send_message(int(oid), owner_text, reply_markup=rows, parse_mode="HTML")
-            except Exception:
-                pass
+        return
 
-        await message.answer(
-            "✅ Оплата получена. Заявка отправлена создателю. После проверки он подтвердит премиум-доступ.",
-            reply_markup=back_menu()
-        )
-    elif payload.startswith("star_pack:"):
-        parts = payload.split(":")
-        pack_code = parts[1] if len(parts) > 1 else ""
-        p = get_user_data(message.from_user)
+    if parsed["kind"] == "star_pack":
+        pack_code = parsed["code"]
         pack = STAR_PACKS.get(pack_code)
         if not pack:
             await message.answer("✅ Платёж получен, но набор не найден. Напиши /paysupport.", reply_markup=back_menu())
             return
-        p["stars_earned"] = int(p.get("stars_earned", 0)) + int(message.successful_payment.total_amount)
         reward_text = grant_star_pack_reward(p, pack_code)
+        record_payment(p, pay_id, "star_pack", pack_code, payment.total_amount)
         save_json(DATA_FILE, DATA)
         await message.answer(
             "✅ <b>Оплата получена. Набор выдан.</b>\n\n" + reward_text,
@@ -4934,10 +5131,10 @@ async def successful_payment(message: types.Message):
             f"Игрок: <b>{e(p.get('name', message.from_user.full_name))}</b>\n"
             f"ID: <code>{message.from_user.id}</code>\n"
             f"Набор: <b>{e(pack['title'])}</b>\n"
-            f"Stars: <b>{message.successful_payment.total_amount}</b>"
+            f"Stars: <b>{payment.total_amount}</b>\n"
+            f"Payment ID: <code>{e(pay_id)}</code>"
         )
-    else:
-        await message.answer("✅ Платёж получен.")
+        return
 
 
 
@@ -5103,16 +5300,51 @@ async def mega_buy(callback: types.CallbackQuery):
     await callback.answer()
 
 
+def _queue_uid(item):
+    if isinstance(item, dict):
+        return str(item.get("uid", ""))
+    return str(item)
+
+
+def cleanup_online_queue():
+    now = datetime.now()
+    fresh = []
+    seen = set()
+    for item in online_queue:
+        uid = _queue_uid(item)
+        if not uid or uid in seen:
+            continue
+        seen.add(uid)
+        joined_raw = item.get("joined_at") if isinstance(item, dict) else ""
+        expired = False
+        if joined_raw:
+            try:
+                expired = (now - datetime.fromisoformat(joined_raw)).total_seconds() > ONLINE_QUEUE_TTL_SECONDS
+            except Exception:
+                expired = True
+        if not expired and is_online(uid):
+            fresh.append(item)
+    online_queue[:] = fresh
+
+
+def remove_from_online_queue(uid):
+    uid = str(uid)
+    before = len(online_queue)
+    online_queue[:] = [item for item in online_queue if _queue_uid(item) != uid]
+    return len(online_queue) != before
+
+
 async def join_online_queue(user):
     uid = str(user.id)
     get_user_data(user)
-    if uid in online_queue:
+    cleanup_online_queue()
+    if any(_queue_uid(item) == uid for item in online_queue):
         return None
-    if online_queue:
-        enemy = online_queue.pop(0)
-        if enemy == uid:
-            online_queue.append(uid)
-            return None
+    while online_queue:
+        enemy_item = online_queue.pop(0)
+        enemy = _queue_uid(enemy_item)
+        if not enemy or enemy == uid or not is_online(enemy):
+            continue
         bid = new_pvp_id()
         active_pvp[bid] = {
             "players": [enemy, uid],
@@ -5128,25 +5360,46 @@ async def join_online_queue(user):
             "scored": False,
             "starters": {},
             "resolved": False,
+            "created_at": datetime.now().isoformat(),
         }
         return bid
-    online_queue.append(uid)
+    online_queue.append({"uid": uid, "joined_at": datetime.now().isoformat()})
     return None
+
+
+async def announce_online_match(bid):
+    state = active_pvp[bid]
+    for uid in state["players"]:
+        try:
+            await bot.send_message(int(uid), "🌐 Онлайн-соперник найден. Начинается скрытый PvP-драфт.", parse_mode="HTML")
+        except Exception as ex:
+            logger.debug("Online match notification failed for %s: %s", uid, ex)
+    await send_pvp_round(bid)
 
 
 @dp.callback_query(F.data == "online_search")
 async def online_search_cb(callback: types.CallbackQuery):
     bid = await join_online_queue(callback.from_user)
     if bid:
-        state = active_pvp[bid]
-        for uid in state["players"]:
-            try:
-                await bot.send_message(int(uid), "🌐 Онлайн-соперник найден. Начинается скрытый PvP-драфт.", parse_mode="HTML")
-            except Exception:
-                pass
-        await send_pvp_round(bid)
+        await announce_online_match(bid)
     else:
-        await callback.message.answer("🌐 <b>Поиск онлайн-боя</b>\n\nТы в очереди. Когда появится второй игрок, бой начнётся автоматически.", reply_markup=back_menu(), parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отменить поиск", callback_data="online_cancel")],
+            [InlineKeyboardButton(text="⬅️ Режимы", callback_data="modes")],
+        ])
+        await callback.message.answer(
+            "🌐 <b>Поиск онлайн-боя</b>\n\n"
+            "Ты в очереди. Если соперник не найдётся за 5 минут, очередь очистится автоматически.",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "online_cancel")
+async def online_cancel_cb(callback: types.CallbackQuery):
+    removed = remove_from_online_queue(callback.from_user.id)
+    await callback.message.answer("❌ Поиск онлайн-боя отменён." if removed else "Очередь уже пуста.", reply_markup=back_menu())
     await callback.answer()
 
 
@@ -5154,15 +5407,13 @@ async def online_search_cb(callback: types.CallbackQuery):
 async def online_cmd(message: types.Message):
     bid = await join_online_queue(message.from_user)
     if bid:
-        state = active_pvp[bid]
-        for uid in state["players"]:
-            try:
-                await bot.send_message(int(uid), "🌐 Онлайн-соперник найден. Начинается скрытый PvP-драфт.", parse_mode="HTML")
-            except Exception:
-                pass
-        await send_pvp_round(bid)
+        await announce_online_match(bid)
     else:
-        await message.answer("🌐 Ты в очереди онлайн-боя. Жди второго игрока.", reply_markup=back_menu())
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отменить поиск", callback_data="online_cancel")],
+            [InlineKeyboardButton(text="⬅️ Режимы", callback_data="modes")],
+        ])
+        await message.answer("🌐 Ты в очереди онлайн-боя. Автоочистка — через 5 минут.", reply_markup=kb)
 
 
 def ensure_admin_known_users():
