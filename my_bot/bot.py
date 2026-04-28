@@ -4,17 +4,25 @@ import json
 import os
 import random
 import string
+import sqlite3
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from html import escape
 
 from aiogram import Bot, Dispatcher, F, types, BaseMiddleware
 from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, FSInputFile, LabeledPrice
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, FSInputFile, LabeledPrice, BotCommandScopeDefault, BotCommandScopeChat
 from aiohttp import web
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except Exception:
+    Image = ImageDraw = ImageFont = None
+
 
 TOKEN_FILE = "token.txt"
 DATA_FILE = "anime_battle_data.json"
+DATA_DB_FILE = "anime_battle_data.db"
 CARDS_FILE = "cards.json"
 PROMO_FILE = "promo_codes.json"
 OWNER_FILE = "owner_ids.txt"
@@ -28,8 +36,9 @@ CHOICE_TIMEOUT_SECONDS = 20
 CHOICE_WARN_10_AFTER = 10
 CHOICE_WARN_5_AFTER = 15
 PASS_PRICE_STARS = 199
-MOON_EMOJI = "🌙"
+MOON_EMOJI = "🌘"
 CASE_PRICES = {"event": 3, "holiday": 5, "mystic": 12}
+PITY_LIMITS = {"epic": 10, "legendary": 50, "mythic": 150}
 CASE_NAMES = {"event": "Ивент-кейс", "holiday": "Праздничный кейс", "mystic": "Мифический кейс"}
 
 ARENAS = {
@@ -189,7 +198,6 @@ SHOP_PACKS = {
 BADGE_SHOP = {
     "killer": {"title": "Убийца", "emoji": "🗡", "cost": 2500, "desc": "боевой знак для агрессивных игроков"},
     "event_hunter": {"title": "Охотник ивентов", "emoji": "⚡", "cost": 3500, "desc": "знак активного участника событий"},
-    "premium": {"title": "Премиум", "emoji": "👑", "cost": 5000, "desc": "тестовый премиум-знак профиля"},
     "tester": {"title": "Тестер", "emoji": "🧪", "cost": 1800, "desc": "знак раннего игрока и проверяющего"},
 }
 
@@ -256,6 +264,19 @@ ARTIFACTS = [
     {"name": "Сензу", "text": "частично восстанавливает тело после тяжёлого удара", "delta": {"durability": 24}},
     {"name": "Печать луны", "text": "усиливает бойца, который отстаёт по очкам", "delta": {"hax": 14, "iq": 10}},
     {"name": "Осколок Хогёку", "text": "помогает пережить критический момент и продолжить бой", "delta": {"durability": 12, "hax": 12}},
+    {"name": "Риннеган-резонанс", "text": "усиливает пространственный контроль и чтение боя", "delta": {"hax": 18, "iq": 10}},
+    {"name": "Камень философа", "text": "даёт запас энергии на поздний раунд", "delta": {"durability": 10, "hax": 14}},
+    {"name": "Трилистник гримуара", "text": "стабилизирует магию и усиливает точность техник", "delta": {"hax": 16, "iq": 8}},
+    {"name": "Четырёхлистный гримуар", "text": "редкий всплеск удачи и магической силы", "delta": {"hax": 22, "team": 8}},
+    {"name": "Десятихвостый осколок", "text": "даёт грубую мощь, но плохо держит контроль", "delta": {"power": 24, "durability": 8, "iq": -4}},
+    {"name": "Кусочек Воли D.", "text": "если команда проигрывает, персонаж получает волевой рывок", "delta": {"power": 12, "speed": 10, "team": 12}},
+    {"name": "Клинок занпакто", "text": "режет защиту и усиливает дуэльный обмен", "delta": {"power": 14, "speed": 8}},
+    {"name": "Фрагмент Банкaя", "text": "короткое окно максимального давления", "delta": {"power": 20, "hax": 10}},
+    {"name": "Кольцо Вонголы", "text": "усиливает командную волю и контроль темпа", "delta": {"team": 18, "iq": 10}},
+    {"name": "Сердце титана", "text": "повышает живучесть под тяжёлым уроном", "delta": {"durability": 22}},
+    {"name": "Плащ анти-магии", "text": "снижает давление магических и проклятых техник", "delta": {"hax": 12, "durability": 10}},
+    {"name": "Нэн-обет", "text": "опасный риск: сильнее удар, но дороже ошибка", "delta": {"power": 18, "iq": 8}},
+    {"name": "Сфера пустоты", "text": "ломает дистанцию и открывает пространственный манёвр", "delta": {"hax": 18, "speed": 8}},
 ]
 
 active_battles = {}
@@ -279,8 +300,47 @@ def load_json(path, default):
         return default
 
 
+def _save_data_sqlite(obj):
+    """Основное хранилище прогресса: SQLite. JSON остаётся как читаемый backup."""
+    try:
+        con = sqlite3.connect(DATA_DB_FILE)
+        con.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        con.execute(
+            "INSERT OR REPLACE INTO kv(key, value, updated_at) VALUES (?, ?, ?)",
+            ("data", json.dumps(obj, ensure_ascii=False), datetime.now().isoformat()),
+        )
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+
+def _load_data_sqlite():
+    try:
+        con = sqlite3.connect(DATA_DB_FILE)
+        con.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        row = con.execute("SELECT value FROM kv WHERE key='data'").fetchone()
+        con.close()
+        if row and row[0]:
+            return json.loads(row[0])
+    except Exception:
+        return None
+    return None
+
+
 def save_json(path, obj):
     Path(path).write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    if str(path) == DATA_FILE:
+        _save_data_sqlite(obj)
+
+
+def load_data_storage(default):
+    data = _load_data_sqlite()
+    if data:
+        return data
+    data = load_json(DATA_FILE, default)
+    _save_data_sqlite(data)
+    return data
 
 
 def read_token():
@@ -366,7 +426,7 @@ ensure_files()
 TOKEN = read_token()
 CARDS = load_cards()
 CARD_BY_ID = {c["id"]: c for c in CARDS}
-DATA = load_json(DATA_FILE, {"users": {}, "friend_invites": {}, "friends": {}})
+DATA = load_data_storage({"users": {}, "friend_invites": {}, "friends": {}})
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -407,7 +467,8 @@ dp.callback_query.middleware(AutoCleanCallbackMiddleware())
 def is_user_banned_id(user_id):
     if is_owner(user_id):
         return False
-    return bool(DATA.get("users", {}).get(str(user_id), {}).get("banned", False))
+    player = DATA.get("users", {}).get(str(user_id), {})
+    return bool(player.get("banned", False) or player.get("frozen", False) or player.get("deleted", False))
 
 
 class BanMiddleware(BaseMiddleware):
@@ -494,7 +555,8 @@ def normalize_collection(player):
 
 def get_user_data(user):
     uid = str(user.id)
-    if uid not in DATA["users"]:
+    now_iso = datetime.now().isoformat()
+    if uid not in DATA.setdefault("users", {}):
         DATA["users"][uid] = {
             "name": user.full_name,
             "fistiks": 250,
@@ -520,7 +582,10 @@ def get_user_data(user):
             "claimed_pass_premium": [],
             "stars_earned": 0,
             "moon_coins": 0,
+            "pity_counters": {"epic": 0, "legendary": 0, "mythic": 0},
+            "notify_free_pack": True,
             "banned": False,
+            "frozen": False,
             "pass_premium_cap": 0,
             "deck": [],
             "auto_team": True,
@@ -528,34 +593,41 @@ def get_user_data(user):
             "pass_task_progress": {},
             "pass_task_claimed": [],
             "pass_purchase_request": "",
-            "created_at": datetime.now().isoformat(),
+            "created_at": now_iso,
             "newbie_claimed": [],
             "newbie_progress": {},
             "pvp_team_source": "deck",
         }
-        # Стартовая коллекция: чтобы новичок мог сразу войти в арену своими картами.
         starter_ids = ["levi_peak", "mikasa", "kirito_alicization", "gon_base", "tanjiro_sun"]
         for sid in starter_ids:
             if sid in CARD_BY_ID:
                 DATA["users"][uid]["collection"][sid] = {"count": 1, "shards": 0, "level": 1, "unlocked": True}
+
     player = DATA["users"][uid]
     if "fistiks" not in player:
         player["fistiks"] = player.get("coins", 250)
-    for k, v in {
+    defaults = {
         "xp": 0, "badges": [], "premium": False, "used_promos": [], "last_daily": "",
-        "last_free_pack": "", "free_pack_notified": False, "last_free_notice": "", "ref_by": "", "ref_count": 0,
-        "wins": 0, "losses": 0, "battles": 0, "last_seen": "", "ref_earned": 0, "nickname": "", "pass_xp": 0, "pass_premium": False, "claimed_pass_free": [], "claimed_pass_premium": [], "stars_earned": 0, "moon_coins": 0, "banned": False, "pass_premium_cap": 0, "deck": [], "auto_team": True, "pass_daily_date": "", "pass_task_progress": {}, "pass_task_claimed": [], "pass_purchase_request": "", "created_at": datetime.now().isoformat(), "newbie_claimed": [], "newbie_progress": {}, "pvp_team_source": "deck",
-    }.items():
+        "last_free_pack": "", "free_pack_notified": False, "last_free_notice": "",
+        "ref_by": "", "ref_count": 0, "ref_earned": 0, "nickname": "",
+        "wins": 0, "losses": 0, "battles": 0, "last_seen": "",
+        "pass_xp": 0, "pass_premium": False, "claimed_pass_free": [], "claimed_pass_premium": [],
+        "stars_earned": 0, "moon_coins": 0, "pity_counters": {"epic": 0, "legendary": 0, "mythic": 0},
+        "notify_free_pack": True, "banned": False, "frozen": False, "pass_premium_cap": 0,
+        "deck": [], "auto_team": True, "pass_daily_date": "", "pass_task_progress": {},
+        "pass_task_claimed": [], "pass_purchase_request": "", "created_at": now_iso,
+        "newbie_claimed": [], "newbie_progress": {}, "pvp_team_source": "deck",
+    }
+    for k, v in defaults.items():
         player.setdefault(k, v)
-    if player.get("nickname"):
-        player["name"] = player["nickname"]
-    else:
-        player["name"] = user.full_name
-    player["last_seen"] = datetime.now().isoformat()
+    player.setdefault("collection", {})
+    player.setdefault("pity_counters", {"epic": 0, "legendary": 0, "mythic": 0})
+
+    player["name"] = player.get("nickname") or user.full_name
+    player["last_seen"] = now_iso
     normalize_collection(player)
 
     if is_owner(user.id):
-        # Владелец: ник не трогаем, но выдаём абсолютный максимум и отдельные знаки.
         player["fistiks"] = 999999999
         player["wins"] = max(player.get("wins", 0), 9999)
         player["losses"] = 0
@@ -566,13 +638,14 @@ def get_user_data(user):
         player["pass_premium_cap"] = 100
         player["pass_xp"] = max(int(player.get("pass_xp", 0)), 999999)
         player["moon_coins"] = 999999999
+        player["banned"] = False
+        player["frozen"] = False
         player["creator_role"] = "👑 Владелец мультивселенной"
         player["creator_aura"] = "♾ Абсолютный знак создателя"
         for badge in ["DEV", "ROMA_OWNER", "IT_ARCHITECT", "ABSOLUTE_MAX"]:
             if badge not in player["badges"]:
                 player["badges"].append(badge)
         for cid in CARD_BY_ID:
-            # У владельца должна быть одна чистая копия каждой карты, без визуальных дублей.
             player["collection"][cid] = {"count": 1, "shards": 999999, "level": MAX_LEVEL, "unlocked": True}
     elif is_right_hand(user.id):
         player["fistiks"] = max(player.get("fistiks", 0), 5000000)
@@ -585,16 +658,16 @@ def get_user_data(user):
     save_json(DATA_FILE, DATA)
     return player
 
-
 def main_menu(user_id=None):
     rows = [
         [InlineKeyboardButton(text="🎮 Режимы", callback_data="modes"), InlineKeyboardButton(text="🃏 Коллекция", callback_data="collection:page:0")],
         [InlineKeyboardButton(text="📦 Магазин / награды", callback_data="shop"), InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
         [InlineKeyboardButton(text="⚒️ Крафт", callback_data="craft"), InlineKeyboardButton(text="🎟 Мультипасс", callback_data="multipass")],
+        [InlineKeyboardButton(text="🏯 Ивенты / турнир", callback_data="events")],
     ]
     if user_id and is_newbie_active(user_id):
         rows.append([InlineKeyboardButton(text="🚀 Старт новичка", callback_data="newbie_start")])
-    rows.append([InlineKeyboardButton(text="🌙 Кейсы", callback_data="cases")])
+    rows.append([InlineKeyboardButton(text="🌘 Кейсы", callback_data="cases")])
     if user_id and is_owner(user_id):
         rows.append([InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin")])
     rows.append([InlineKeyboardButton(text="📜 Правила", callback_data="rules")])
@@ -609,7 +682,7 @@ def profile_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Статистика", callback_data="profile_stats"), InlineKeyboardButton(text="🏷 Знаки", callback_data="profile_badges")],
         [InlineKeyboardButton(text="👥 Друзья", callback_data="friends"), InlineKeyboardButton(text="✏️ Ник", callback_data="nick_help")],
-        [InlineKeyboardButton(text="📜 Правила", callback_data="rules")],
+        [InlineKeyboardButton(text="🔔 Уведомления", callback_data="notify_settings"), InlineKeyboardButton(text="📜 Правила", callback_data="rules")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
     ])
 
@@ -619,7 +692,7 @@ def shop_menu():
         [InlineKeyboardButton(text="🧰 Сундуки", callback_data="chests"), InlineKeyboardButton(text="🎴 Мега-открытие", callback_data="mega_open")],
         [InlineKeyboardButton(text="🎁 Награда", callback_data="daily"), InlineKeyboardButton(text="🏆 Рейтинг", callback_data="rating")],
         [InlineKeyboardButton(text="🎟 Промокод", callback_data="promo_help"), InlineKeyboardButton(text="🏷 Знаки", callback_data="badges_shop")],
-        [InlineKeyboardButton(text="🎟 Мультипасс", callback_data="multipass"), InlineKeyboardButton(text="🌙 Кейсы", callback_data="cases")],
+        [InlineKeyboardButton(text="🎟 Мультипасс", callback_data="multipass"), InlineKeyboardButton(text="🌘 Кейсы", callback_data="cases")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -633,8 +706,78 @@ def media_path(card_id):
     return None
 
 
+def make_card_banner(card_id):
+    if Image is None or ImageDraw is None or ImageFont is None or card_id not in CARD_BY_ID:
+        return None
+    out_dir = MEDIA_DIR / "generated_cards"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"{card_id}.png"
+    if out.exists():
+        return out
+    c = CARD_BY_ID[card_id]
+    colors = {
+        "Обычный": ((48, 52, 62), (128, 132, 145)),
+        "Редкий": ((20, 56, 120), (55, 150, 255)),
+        "Эпический": ((80, 22, 120), (185, 86, 255)),
+        "Легендарный": ((110, 72, 10), (255, 191, 55)),
+        "Мифический": ((120, 12, 35), (255, 55, 105)),
+    }
+    top, bottom = colors.get(c.get("rarity", "Обычный"), colors["Обычный"])
+    w, h = 900, 1200
+    img = Image.new("RGB", (w, h), top)
+    draw = ImageDraw.Draw(img)
+    for y in range(h):
+        t = y / h
+        col = tuple(int(top[i] * (1 - t) + bottom[i] * t) for i in range(3))
+        draw.line([(0, y), (w, y)], fill=col)
+    # Космические круги/энергия — нейтральный баннер, без чужих изображений.
+    for _ in range(55):
+        x = random.randint(-100, w)
+        y = random.randint(-100, h)
+        r = random.randint(2, 18)
+        draw.ellipse((x, y, x + r, y + r), fill=(255, 255, 255))
+    for off in [0, 30, 60]:
+        draw.ellipse((80-off, 110-off, w-80+off, h-250+off), outline=(255,255,255), width=3)
+    try:
+        font_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 62)
+        font_mid = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 38)
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+    except Exception:
+        font_big = font_mid = font_small = ImageFont.load_default()
+    def wrap(txt, max_len):
+        words = str(txt).split()
+        lines, cur = [], ""
+        for word in words:
+            if len(cur + " " + word) <= max_len:
+                cur = (cur + " " + word).strip()
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = word
+        if cur:
+            lines.append(cur)
+        return lines[:4]
+    y = 350
+    for line in wrap(c.get("name", card_id), 18):
+        draw.text((60, y), line, font=font_big, fill=(255,255,255), stroke_width=3, stroke_fill=(0,0,0))
+        y += 70
+    y += 15
+    draw.text((60, y), f"{c.get('rarity','')} • {c.get('anime','')}", font=font_mid, fill=(255,238,170), stroke_width=2, stroke_fill=(0,0,0))
+    y += 55
+    for line in wrap(c.get("form", "Базовая форма"), 30):
+        draw.text((60, y), line, font=font_small, fill=(235,245,255), stroke_width=2, stroke_fill=(0,0,0))
+        y += 38
+    draw.rectangle((0, h-150, w, h), fill=(0,0,0))
+    draw.text((55, h-120), "ANIME BATTLE MULTIVERSE", font=font_mid, fill=(255,255,255))
+    draw.text((55, h-70), "Полное описание смотри в коллекции", font=font_small, fill=(210,210,230))
+    img.save(out)
+    return out
+
+
 async def send_card_media(message, card_id):
     p = media_path(card_id)
+    if not p:
+        p = make_card_banner(card_id)
     if not p:
         return False
     f = FSInputFile(p)
@@ -750,15 +893,53 @@ def fragment_amount_for(rarity):
     return random.randint(*low_high)
 
 
+def roll_card_with_pity(player, weights=None, exclude=None):
+    pity = player.setdefault("pity_counters", {"epic": 0, "legendary": 0, "mythic": 0})
+    for k in ["epic", "legendary", "mythic"]:
+        pity[k] = int(pity.get(k, 0))
+
+    forced = None
+    note = ""
+    if pity["mythic"] + 1 >= PITY_LIMITS["mythic"]:
+        forced = "Мифический"
+        note = "\n🎯 Сработал гарант мифической редкости."
+    elif pity["legendary"] + 1 >= PITY_LIMITS["legendary"]:
+        forced = "Легендарный"
+        note = "\n🎯 Сработал гарант легендарной редкости."
+    elif pity["epic"] + 1 >= PITY_LIMITS["epic"]:
+        forced = "Эпический"
+        note = "\n🎯 Сработал гарант эпической редкости."
+
+    if forced:
+        card = roll_card(weights={forced: 1}, exclude=exclude, allowed_rarities=[forced])
+        if card is None:
+            card = roll_card(weights=weights, exclude=exclude)
+            note = ""
+    else:
+        card = roll_card(weights=weights, exclude=exclude)
+
+    rarity = card.get("rarity", "Обычный")
+    pity["epic"] += 1
+    pity["legendary"] += 1
+    pity["mythic"] += 1
+    if rarity in ("Эпический", "Легендарный", "Мифический"):
+        pity["epic"] = 0
+    if rarity in ("Легендарный", "Мифический"):
+        pity["legendary"] = 0
+    if rarity == "Мифический":
+        pity["mythic"] = 0
+    return card, note
+
+
 def pull_pack_reward(player, weights, exclude=None):
-    card = roll_card(weights=weights, exclude=exclude)
+    card, pity_note = roll_card_with_pity(player, weights=weights, exclude=exclude)
     # Чаще падают фрагменты. Полная карта — отдельный редкий дроп.
     if random.random() < full_card_drop_chance(card["rarity"]):
         result = add_card(player, card["id"])
     else:
         amount = fragment_amount_for(card["rarity"])
         result = add_fragments(player, card["id"], amount)
-    return card, result
+    return card, result + pity_note
 
 def roll_card(weights=None, exclude=None, allowed_rarities=None):
     exclude = set(exclude or [])
@@ -998,8 +1179,12 @@ def duel_score(inst):
 def duel_line(round_no, left_name, right_name, left_inst, right_inst, arena_code="ruins"):
     left = CARD_BY_ID[left_inst["card_id"]]
     right = CARD_BY_ID[right_inst["card_id"]]
-    ls = duel_score(left_inst)
-    rs = duel_score(right_inst)
+    left_base = instance_score(left_inst)
+    right_base = instance_score(right_inst)
+    left_rand = random.randint(-28, 28)
+    right_rand = random.randint(-28, 28)
+    ls = left_base + left_rand
+    rs = right_base + right_rand
     arena_bonus = ARENA_EFFECTS.get(arena_code, ("", ""))[0]
     if ls >= rs:
         winner_name = left_name
@@ -1023,6 +1208,9 @@ def duel_line(round_no, left_name, right_name, left_inst, right_inst, arena_code
     text = (
         f"🥊 <b>Раунд {round_no}</b>\n"
         f"{e(left['name'])} vs {e(right['name'])}\n"
+        f"• Расчёт: {e(left_name)} <b>{ls}</b> = база {left_base} + рандом {left_rand:+d}; "
+        f"{e(right_name)} <b>{rs}</b> = база {right_base} + рандом {right_rand:+d}.\n"
+        f"• Артефакт: {e(left_inst['artifact']['name'])} vs {e(right_inst['artifact']['name'])}.\n"
         f"• {e(winner_card['name'])} {random.choice(actions)}.\n"
         f"• Плюс победителя: {e(winner_card.get('plus', 'сильная техника'))}.\n"
         f"• Цена/минус: {e(winner_card.get('minus', 'есть откат после атаки'))}.\n"
@@ -1084,28 +1272,45 @@ async def send_long(message, text, reply_markup=None):
 
 
 async def set_commands():
-    commands = [
+    public_commands = [
         BotCommand(command="start", description="Главное меню"),
-        BotCommand(command="battle", description="Арена мультивселенной"),
-        BotCommand(command="appeal", description="Оспорить бой"),
+        BotCommand(command="battle", description="Арена с ботом"),
+        BotCommand(command="online", description="Онлайн-бой"),
         BotCommand(command="collection", description="Коллекция"),
         BotCommand(command="profile", description="Профиль"),
-        BotCommand(command="shop", description="Магазин"),
+        BotCommand(command="shop", description="Магазин / награды"),
         BotCommand(command="daily", description="Ежедневная награда"),
         BotCommand(command="craft", description="Крафт"),
         BotCommand(command="rating", description="Рейтинг"),
-        BotCommand(command="friends", description="Друзья и рефералка"),
+        BotCommand(command="friends", description="Друзья"),
         BotCommand(command="addfriend", description="Добавить друга по ID"),
-        BotCommand(command="promo", description="Ввести промокод"),
+        BotCommand(command="promo", description="Промокод"),
         BotCommand(command="rules", description="Правила"),
         BotCommand(command="myid", description="Мой Telegram ID"),
-        BotCommand(command="online", description="Поиск онлайн-боя"),
         BotCommand(command="pass", description="Мультипасс"),
         BotCommand(command="nick", description="Сменить ник"),
-        BotCommand(command="admin", description="Админ-панель владельца"),
+        BotCommand(command="events", description="Ивенты, рейд и турнир"),
         BotCommand(command="commands", description="Все команды"),
+        BotCommand(command="findcard", description="Поиск карты"),
     ]
-    await bot.set_my_commands(commands)
+    await bot.set_my_commands(public_commands, scope=BotCommandScopeDefault())
+    owner_commands = public_commands + [
+        BotCommand(command="admin", description="Админ-панель владельца"),
+        BotCommand(command="user", description="Открыть игрока по ID"),
+        BotCommand(command="ban", description="Заблокировать игрока"),
+        BotCommand(command="unban", description="Разблокировать игрока"),
+        BotCommand(command="freeze", description="Заморозить аккаунт"),
+        BotCommand(command="unfreeze", description="Снять заморозку"),
+        BotCommand(command="givef", description="Выдать фисташки"),
+        BotCommand(command="givemoon", description="Выдать астральные монеты"),
+        BotCommand(command="givecard", description="Выдать карту"),
+        BotCommand(command="deleteuser", description="Удалить игрока с подтверждением"),
+    ]
+    for oid in owner_ids():
+        try:
+            await bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(chat_id=int(oid)))
+        except Exception:
+            pass
 
 
 @dp.message(Command("appeal"))
@@ -1174,23 +1379,40 @@ async def myid(message: types.Message):
 
 @dp.message(Command("commands"))
 async def commands_cmd(message: types.Message):
-    await message.answer(
+    text = (
         "📋 <b>Команды</b>\n\n"
-        "/start — меню\n"
-        "/battle — арена с ботом\n"
-        "/collection — коллекция\n"
+        "/start — главное меню\n"
+        "/battle — бой с ботом\n"
+        "/online — онлайн-бой\n"
+        "/collection — коллекция и фильтры\n"
+        "/findcard имя — поиск карты\n"
         "/profile — профиль\n"
-        "/shop — магазин\n"
+        "/shop — магазин, сундуки, кейсы\n"
         "/daily — ежедневная награда\n"
         "/craft — крафт\n"
         "/rating — рейтинг\n"
-        "/friends — друзья\n"
+        "/friends — друзья и рефералка\n"
+        "/addfriend ID — добавить друга\n"
         "/promo КОД — промокод\n"
+        "/pass — мультипасс\n"
+        "/nick НовыйНик — сменить ник\n"
+        "/events — ивенты, турнир и рейд\n"
         "/rules — правила\n"
-        "/myid — твой ID",
-        parse_mode="HTML",
-        reply_markup=back_menu()
+        "/myid — твой ID\n"
     )
+    if is_owner(message.from_user.id):
+        text += (
+            "\n🛠 <b>Команды владельца</b>\n"
+            "/admin — командный центр\n"
+            "/user ID — открыть аккаунт\n"
+            "/ban ID / /unban ID — бан/разбан\n"
+            "/freeze ID / /unfreeze ID — заморозка\n"
+            "/givef ID AMOUNT — выдать фисташки\n"
+            "/givemoon ID AMOUNT — выдать астральные монеты\n"
+            "/givecard ID CARD_ID — выдать карту\n"
+            "/deleteuser ID — удалить только после подтверждения\n"
+        )
+    await message.answer(text, parse_mode="HTML", reply_markup=back_menu())
 
 
 @dp.message(CommandStart())
@@ -1234,7 +1456,7 @@ async def send_profile(message, user):
         f"Роль: {role}{aura}\n"
         f"⭐ Уровень: <b>{lvl}</b> ({rem}/{nxt} XP)\n"
         f"💎 Фисташки: <b>{p['fistiks']}</b>\n"
-        f"🌙 Лунные монеты: <b>{p.get('moon_coins', 0)}</b>\n"
+        f"🌘 Астральные монеты: <b>{p.get('moon_coins', 0)}</b>\n"
         f"🃏 Карт всего: <b>{total}</b>\n"
         f"📚 Уникальных карт: <b>{unique}/{len(CARDS)}</b>\n\n"
         "Ниже отдельные вкладки: статистика, знаки, друзья, ник и правила.",
@@ -1254,7 +1476,7 @@ async def send_profile_stats(message, user):
         "📊 <b>Статистика</b>\n\n"
         f"⭐ Уровень: <b>{lvl}</b> ({rem}/{nxt} XP)\n"
         f"💎 Фисташки: <b>{p.get('fistiks', 0)}</b>\n"
-        f"🌙 Лунные монеты: <b>{p.get('moon_coins', 0)}</b>\n\n"
+        f"🌘 Астральные монеты: <b>{p.get('moon_coins', 0)}</b>\n\n"
         f"⚔️ Боёв: <b>{battles}</b>\n"
         f"🏆 Побед: <b>{wins}</b>\n"
         f"💀 Поражений: <b>{losses}</b>\n"
@@ -1295,26 +1517,35 @@ async def deck_cb(callback: types.CallbackQuery):
 
     text = "🧬 <b>Колода</b>\n\n"
     text += f"Автосбор команды: <b>{'включён' if p.get('auto_team', True) else 'выключен'}</b>\n"
-    text += "Бой с ботом теперь стартует именно от твоей колоды, а не от случайной каши.\n\n"
+    text += "Можно автособрать топ-5 или вручную поставить карту в каждый слот.\n\n"
 
     deck_ids = [cid for cid in p.get("deck", []) if cid in CARD_BY_ID]
-    if deck_ids:
-        text += "<b>Текущая команда 5 бойцов:</b>\n"
-        for n, cid in enumerate(deck_ids[:5], 1):
+    text += "<b>Текущая команда 5 бойцов:</b>\n"
+    for n in range(5):
+        if n < len(deck_ids):
+            cid = deck_ids[n]
             c = CARD_BY_ID[cid]
             lvl = int(p.get("collection", {}).get(cid, {}).get("level", 1))
-            text += f"{n}. {rarity_label(c['rarity'])} <b>{e(c['name'])}</b> | ур. {lvl}/{MAX_LEVEL} | сила {card_power(c, lvl)}\n"
-    else:
-        text += "Пока нет открытых карт. Открой сундуки или собери карту из 100 фрагментов."
+            text += f"{n+1}. {rarity_label(c['rarity'])} <b>{e(c['name'])}</b> | ур. {lvl}/{MAX_LEVEL} | сила {card_power(c, lvl)}\n"
+        else:
+            text += f"{n+1}. — пустой слот\n"
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🧠 Автособрать топ-5", callback_data="auto_build_deck")],
-        [InlineKeyboardButton(text="🔁 Переключить автосбор", callback_data="toggle_auto_team")],
+    kb_rows = [
+        [InlineKeyboardButton(text="🧠 Автособрать топ-5", callback_data="auto_build_deck"), InlineKeyboardButton(text="🔁 Автосбор", callback_data="toggle_auto_team")],
         [InlineKeyboardButton(text="⚡ Автоулучшить доступное", callback_data="auto_upgrade")],
-        [InlineKeyboardButton(text="⚔️ В бой", callback_data="battle:start")],
-        [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")]
+    ]
+    kb_rows.append([
+        InlineKeyboardButton(text="Слот 1", callback_data="deck_slot:0:0"),
+        InlineKeyboardButton(text="Слот 2", callback_data="deck_slot:1:0"),
+        InlineKeyboardButton(text="Слот 3", callback_data="deck_slot:2:0"),
     ])
-    await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    kb_rows.append([
+        InlineKeyboardButton(text="Слот 4", callback_data="deck_slot:3:0"),
+        InlineKeyboardButton(text="Слот 5", callback_data="deck_slot:4:0"),
+    ])
+    kb_rows.append([InlineKeyboardButton(text="⚔️ В бой", callback_data="battle:start")])
+    kb_rows.append([InlineKeyboardButton(text="⬅️ Режимы", callback_data="modes"), InlineKeyboardButton(text="🏠 Меню", callback_data="menu")])
+    await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML")
     await callback.answer()
 
 
@@ -1343,6 +1574,72 @@ async def toggle_auto_team_cb(callback: types.CallbackQuery):
     await callback.answer()
 
 
+async def send_deck_slot(message, user, slot=0, page=0):
+    p = get_user_data(user)
+    owned = [(cid, info) for cid, info in p.get("collection", {}).items() if cid in CARD_BY_ID and int(info.get("count", 0)) > 0]
+    owned.sort(key=lambda x: card_power(CARD_BY_ID[x[0]], int(x[1].get("level", 1))), reverse=True)
+    if not owned:
+        await message.answer("Нет открытых карт для выбора в колоду.", reply_markup=back_menu())
+        return
+    per_page = 8
+    pages = max(1, (len(owned) + per_page - 1) // per_page)
+    page = max(0, min(page, pages - 1))
+    rows = []
+    text = f"🎯 <b>Выбор карты в слот {slot+1}</b> — страница {page+1}/{pages}\n\n"
+    for cid, info in owned[page*per_page:(page+1)*per_page]:
+        c = CARD_BY_ID[cid]
+        lvl = int(info.get("level", 1))
+        text += f"• {rarity_label(c['rarity'])} <b>{e(c['name'])}</b> | ур.{lvl} | сила {card_power(c,lvl)}\n"
+        rows.append([InlineKeyboardButton(text=f"Поставить: {c['name'][:28]}", callback_data=f"deck_set:{slot}:{cid}")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"deck_slot:{slot}:{page-1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"deck_slot:{slot}:{page+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ Колода", callback_data="deck")])
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("deck_slot:"))
+async def deck_slot_cb(callback: types.CallbackQuery):
+    try:
+        _, slot_s, page_s = callback.data.split(":")
+        slot = max(0, min(4, int(slot_s)))
+        page = max(0, int(page_s))
+    except Exception:
+        await callback.answer("Ошибка слота.", show_alert=True)
+        return
+    await send_deck_slot(callback.message, callback.from_user, slot, page)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("deck_set:"))
+async def deck_set_cb(callback: types.CallbackQuery):
+    try:
+        _, slot_s, cid = callback.data.split(":", 2)
+        slot = max(0, min(4, int(slot_s)))
+    except Exception:
+        await callback.answer("Ошибка выбора карты.", show_alert=True)
+        return
+    p = get_user_data(callback.from_user)
+    if cid not in CARD_BY_ID or cid not in p.get("collection", {}) or int(p["collection"][cid].get("count", 0)) <= 0:
+        await callback.answer("Этой карты нет в твоей коллекции.", show_alert=True)
+        return
+    deck = [x for x in p.get("deck", []) if x in CARD_BY_ID]
+    while len(deck) < 5:
+        deck.append("")
+    # Убираем карту из другого слота, чтобы не было дубля в одной команде.
+    deck = ["" if x == cid else x for x in deck]
+    deck[slot] = cid
+    p["deck"] = [x for x in deck if x]
+    p["auto_team"] = False
+    save_json(DATA_FILE, DATA)
+    await callback.message.answer(f"✅ В слот {slot+1} поставлен: <b>{e(CARD_BY_ID[cid]['name'])}</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Колода", callback_data="deck")]]), parse_mode="HTML")
+    await callback.answer()
+
+
 @dp.callback_query(F.data == "auto_upgrade")
 async def auto_upgrade_cb(callback: types.CallbackQuery):
     p = get_user_data(callback.from_user)
@@ -1366,6 +1663,7 @@ async def auto_upgrade_cb(callback: types.CallbackQuery):
     await callback.message.answer(f"⚡ Автоулучшение завершено. Повышений уровня: {upgraded}.", reply_markup=back_menu())
     await callback.answer()
 
+
 @dp.callback_query(F.data == "profile")
 async def profile_cb(callback: types.CallbackQuery):
     await send_profile(callback.message, callback.from_user)
@@ -1382,6 +1680,37 @@ async def profile_stats_cb(callback: types.CallbackQuery):
 async def profile_badges_cb(callback: types.CallbackQuery):
     await send_profile_badges(callback.message, callback.from_user)
     await callback.answer()
+
+
+async def send_notify_settings(message, user):
+    p = get_user_data(user)
+    enabled = bool(p.get("notify_free_pack", True))
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=("🔕 Выключить" if enabled else "🔔 Включить"), callback_data="notify_toggle")],
+        [InlineKeyboardButton(text="⬅️ Профиль", callback_data="profile"), InlineKeyboardButton(text="🏠 Меню", callback_data="menu")],
+    ])
+    await message.answer(
+        "🔔 <b>Уведомления</b>\n\n"
+        f"Напоминание о бесплатном сундуке: <b>{'включено' if enabled else 'выключено'}</b>.\n"
+        "Если включено, бот примерно раз в 3 часа напоминает забрать карту.",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+
+
+@dp.callback_query(F.data == "notify_settings")
+async def notify_settings_cb(callback: types.CallbackQuery):
+    await send_notify_settings(callback.message, callback.from_user)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "notify_toggle")
+async def notify_toggle_cb(callback: types.CallbackQuery):
+    p = get_user_data(callback.from_user)
+    p["notify_free_pack"] = not bool(p.get("notify_free_pack", True))
+    save_json(DATA_FILE, DATA)
+    await send_notify_settings(callback.message, callback.from_user)
+    await callback.answer("Настройка изменена.")
 
 
 async def send_rules(message):
@@ -1460,9 +1789,9 @@ async def send_rules(message):
         "🚀 <b>Старт новичка</b>\n"
         "• Первые 3 дня открыт отдельный раздел с лёгкими заданиями.\n"
         "• Он нужен, чтобы новичок быстро встал на ноги и понял бота.\n\n"
-        "🌙 <b>Кейсы</b>\n"
-        "• Кейсы покупаются за лунные монеты, а не за фисташки.\n"
-        "• Лунные монеты выдаются через мультипасс, задания и ивенты.\n\n"
+        "🌘 <b>Кейсы</b>\n"
+        "• Кейсы покупаются за астральные монеты, а не за фисташки.\n"
+        "• Астральные монеты выдаются через мультипасс, задания и ивенты.\n\n"
         "🎟 <b>Мультипасс</b>\n"
         "• Игрок сначала оплачивает Stars.\n"
         "• Создатель проверяет оплату и вручную открывает премиум до нужного уровня.\n\n"
@@ -1542,7 +1871,7 @@ async def send_shop(message, user):
     await message.answer(
         f"📦 <b>Магазин / награды</b>\n\n"
         f"Баланс: <b>{p['fistiks']}</b> 💎\n"
-        f"Кейсовая валюта: <b>{p.get('moon_coins', 0)}</b> 🌙\n\n"
+        f"Кейсовая валюта: <b>{p.get('moon_coins', 0)}</b> 🌘\n\n"
         "Здесь лежит всё, что связано с покупками, сундуками, кейсами, наградами, рейтингом и промокодами.",
         reply_markup=shop_menu(),
         parse_mode="HTML"
@@ -1562,7 +1891,7 @@ async def send_chests(message, user):
         f"🧰 <b>Сундуки</b>\n\n"
         f"Баланс: <b>{p['fistiks']}</b> 💎\n"
         "Перед покупкой сундука нажми на него — там будут шансы и цена.\n\n"
-        "🆓 Бесплатный сундук доступен раз в 3 часа.",
+        "🆓 Бесплатный сундук доступен раз в 3 часа.\n🎯 Гарант: 10 открытий без эпика → эпик, 50 без легендарки → легендарка, 150 без мифика → мифик.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         parse_mode="HTML"
     )
@@ -1628,7 +1957,7 @@ async def send_pack_result(message, title, cards_got, player):
         )
     text += "\n📖 Полное описание, форма, роль, плюсы и минусы доступны в коллекции."
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅️ Назад к сундукам", callback_data="chests"), InlineKeyboardButton(text="🌙 Кейсы", callback_data="cases")],
+        [InlineKeyboardButton(text="⬅️ Назад к сундукам", callback_data="chests"), InlineKeyboardButton(text="🌘 Кейсы", callback_data="cases")],
         [InlineKeyboardButton(text="⬅️ Магазин / награды", callback_data="shop"), InlineKeyboardButton(text="🏠 Меню", callback_data="menu")],
     ])
     await send_long(message, text, reply_markup=kb)
@@ -1709,47 +2038,76 @@ async def buy_badge(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(F.data == "buy_premium")
-async def buy_premium(callback: types.CallbackQuery):
-    p = get_user_data(callback.from_user)
-    cost = 5000
-    if p["fistiks"] < cost and not is_owner(callback.from_user.id):
-        await callback.answer("Не хватает фисташек.", show_alert=True)
-        return
-    if not is_owner(callback.from_user.id):
-        p["fistiks"] -= cost
-    p["premium"] = True
-    if "PREMIUM" not in p["badges"]:
-        p["badges"].append("PREMIUM")
-    add_xp(p, 200)
-    save_json(DATA_FILE, DATA)
-    await callback.message.answer("👑 Premium-тест активирован.", reply_markup=main_menu(callback.from_user.id))
-    await callback.answer()
+# Старый тестовый buy_premium удалён: премиум теперь только через Мультипасс и Stars.
 
 
-async def send_collection(message, user, page=0):
+def collection_filter_name(code):
+    if code == "all":
+        return "Все редкости"
+    return RARITY_CODES.get(code, code)
+
+
+def collection_sort_key(cid, info, sort_mode):
+    c = CARD_BY_ID[cid]
+    lvl = int(info.get("level", 1))
+    if sort_mode == "name":
+        return c.get("name", "")
+    if sort_mode == "level":
+        return lvl
+    if sort_mode == "anime":
+        return c.get("anime", "")
+    return card_power(c, lvl)
+
+
+async def send_collection(message, user, page=0, rarity_filter="all", sort_mode="power"):
     p = get_user_data(user)
     items = [(cid, info) for cid, info in p["collection"].items() if cid in CARD_BY_ID]
+    if rarity_filter != "all":
+        wanted = RARITY_CODES.get(rarity_filter, rarity_filter)
+        items = [(cid, info) for cid, info in items if CARD_BY_ID[cid].get("rarity") == wanted]
     if not items:
-        await message.answer("🃏 Коллекция пуста. Открой сундук или сыграй бой.", reply_markup=back_menu())
+        await message.answer("🃏 Коллекция пуста по этому фильтру. Открой сундук или поменяй фильтр.", reply_markup=back_menu())
         return
-    items.sort(key=lambda x: (RARITY_BONUS.get(CARD_BY_ID[x[0]]["rarity"], 0), CARD_BY_ID[x[0]]["name"]), reverse=True)
-    per_page = 10
+    reverse = sort_mode != "name" and sort_mode != "anime"
+    items.sort(key=lambda x: collection_sort_key(x[0], x[1], sort_mode), reverse=reverse)
+    per_page = 8
     pages = max(1, (len(items) + per_page - 1) // per_page)
     page = max(0, min(page, pages - 1))
     rows = []
     for cid, info in items[page * per_page:(page + 1) * per_page]:
         c = CARD_BY_ID[cid]
-        rows.append([InlineKeyboardButton(text=f"{RARITY_EMOJI.get(c['rarity'],'⚪')} {c['name']} ур.{info.get('level',1)}", callback_data=f"card:{cid}")])
+        lvl = int(info.get('level',1))
+        rows.append([InlineKeyboardButton(text=f"{RARITY_EMOJI.get(c['rarity'],'⚪')} {c['name'][:32]} ур.{lvl} | {card_power(c,lvl)}", callback_data=f"card:{cid}")])
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"collection:page:{page-1}"))
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"collection:page:{page-1}:{rarity_filter}:{sort_mode}"))
     nav.append(InlineKeyboardButton(text=f"{page+1}/{pages}", callback_data="noop"))
     if page < pages - 1:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"collection:page:{page+1}"))
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"collection:page:{page+1}:{rarity_filter}:{sort_mode}"))
     rows.append(nav)
+    rows.append([
+        InlineKeyboardButton(text="⚪ Обыч.", callback_data="collection:filter:common"),
+        InlineKeyboardButton(text="🔵 Редк.", callback_data="collection:filter:rare"),
+        InlineKeyboardButton(text="🟣 Эпик", callback_data="collection:filter:epic"),
+    ])
+    rows.append([
+        InlineKeyboardButton(text="🟡 Легенд.", callback_data="collection:filter:legendary"),
+        InlineKeyboardButton(text="🔴 Миф.", callback_data="collection:filter:mythic"),
+        InlineKeyboardButton(text="📚 Все", callback_data="collection:filter:all"),
+    ])
+    rows.append([
+        InlineKeyboardButton(text="💪 По силе", callback_data=f"collection:sort:{rarity_filter}:power"),
+        InlineKeyboardButton(text="⬆️ По уровню", callback_data=f"collection:sort:{rarity_filter}:level"),
+        InlineKeyboardButton(text="🔤 По имени", callback_data=f"collection:sort:{rarity_filter}:name"),
+    ])
     rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")])
-    await message.answer("🃏 <b>Коллекция</b>\nНажми на карту, чтобы открыть медиа и описание.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    text = (
+        "🃏 <b>Коллекция</b>\n"
+        f"Фильтр: <b>{e(collection_filter_name(rarity_filter))}</b> | сортировка: <b>{e(sort_mode)}</b>\n"
+        "Нажми на карту, чтобы открыть баннер, медиа и полное описание.\n"
+        "Поиск: <code>/findcard имя</code>"
+    )
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
 
 @dp.message(Command("collection"))
@@ -1757,10 +2115,57 @@ async def collection_cmd(message: types.Message):
     await send_collection(message, message.from_user, 0)
 
 
+@dp.message(Command("findcard"))
+async def findcard_cmd(message: types.Message):
+    query = message.text.replace("/findcard", "", 1).strip().lower()
+    if not query:
+        await message.answer("Формат: <code>/findcard наруто</code>", parse_mode="HTML", reply_markup=back_menu())
+        return
+    p = get_user_data(message.from_user)
+    matches = []
+    for cid, info in p.get("collection", {}).items():
+        if cid not in CARD_BY_ID:
+            continue
+        c = CARD_BY_ID[cid]
+        hay = f"{c.get('name','')} {c.get('anime','')} {c.get('form','')}".lower()
+        if query in hay:
+            matches.append((cid, info))
+    if not matches:
+        await message.answer("Ничего не найдено в твоей коллекции.", reply_markup=back_menu())
+        return
+    matches.sort(key=lambda x: card_power(CARD_BY_ID[x[0]], int(x[1].get('level',1))), reverse=True)
+    rows = []
+    text = f"🔎 <b>Поиск карт:</b> {e(query)}\n\n"
+    for cid, info in matches[:20]:
+        c = CARD_BY_ID[cid]
+        lvl = int(info.get('level', 1))
+        text += f"• {rarity_label(c['rarity'])} <b>{e(c['name'])}</b> | {e(c['anime'])} | ур.{lvl} | сила {card_power(c,lvl)}\n"
+        rows.append([InlineKeyboardButton(text=f"Открыть: {c['name'][:28]}", callback_data=f"card:{cid}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Коллекция", callback_data="collection:page:0:all:power")])
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+
+
 @dp.callback_query(F.data.startswith("collection:page:"))
 async def collection_page(callback: types.CallbackQuery):
-    page = int(callback.data.split(":")[2])
-    await send_collection(callback.message, callback.from_user, page)
+    parts = callback.data.split(":")
+    page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+    rarity_filter = parts[3] if len(parts) > 3 else "all"
+    sort_mode = parts[4] if len(parts) > 4 else "power"
+    await send_collection(callback.message, callback.from_user, page, rarity_filter, sort_mode)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("collection:filter:"))
+async def collection_filter_cb(callback: types.CallbackQuery):
+    rarity_filter = callback.data.split(":", 2)[2]
+    await send_collection(callback.message, callback.from_user, 0, rarity_filter, "power")
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("collection:sort:"))
+async def collection_sort_cb(callback: types.CallbackQuery):
+    _, _, rarity_filter, sort_mode = callback.data.split(":")
+    await send_collection(callback.message, callback.from_user, 0, rarity_filter, sort_mode)
     await callback.answer()
 
 
@@ -1774,7 +2179,7 @@ async def card_detail(callback: types.CallbackQuery):
     await send_card_media(callback.message, cid)
     c = CARD_BY_ID[cid]
     info = p["collection"][cid]
-    level = info.get("level", 1)
+    level = int(info.get("level", 1))
     cost = level_cost(level, c["rarity"])
     next_text = "Максимальный уровень достигнут." if cost is None else f"До следующего уровня: {cost} фрагментов."
     owner_hint = ""
@@ -1785,23 +2190,25 @@ async def card_detail(callback: types.CallbackQuery):
         f"🐉 <b>{e(c['name'])}</b>\n\n"
         f"⭐ Редкость: {rarity_label(c['rarity'])}\n"
         f"⚔️ Сила: <b>{card_power(c, level)}</b>\n"
-        f"🎭 Мод: {e(c['form'])}\n"
-        f"🌍 Аниме: {e(c['anime'])}\n"
-        f"📖 Описание: {e(c.get('description', ''))}\n"
+        f"🎭 Форма: {e(c.get('form',''))}\n"
+        f"🌍 Аниме: {e(c.get('anime',''))}\n"
+        f"🧩 Роль: {e(c.get('role',''))}\n"
         f"📈 Уровень: <b>{level}/{MAX_LEVEL}</b>\n"
         f"🧩 Фрагменты: <b>{info.get('shards',0)}</b>\n"
         f"📌 {e(next_text)}\n\n"
-        f"⚡ Способности: {e(c.get('abilities',''))}\n"
-        f"➕ {e(c['plus'])}\n"
-        f"➖ {e(c['minus'])}"
+        f"📖 <b>Описание:</b> {e(c.get('description', ''))}\n\n"
+        f"⚡ <b>Способности:</b> {e(c.get('abilities',''))}\n"
+        f"➕ <b>Плюс:</b> {e(c.get('plus',''))}\n"
+        f"➖ <b>Минус:</b> {e(c.get('minus',''))}"
         f"{owner_hint}"
     )
     rows = []
     if cost is not None:
         rows.append([InlineKeyboardButton(text=f"⬆️ Улучшить до {level+1}", callback_data=f"upgrade:{cid}")])
-    rows.append([InlineKeyboardButton(text="⬅️ Коллекция", callback_data="collection:page:0")])
+    rows.append([InlineKeyboardButton(text="⬅️ Коллекция", callback_data="collection:page:0:all:power")])
     await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
     await callback.answer()
+
 @dp.callback_query(F.data.startswith("upgrade:"))
 async def upgrade_card(callback: types.CallbackQuery):
     cid = callback.data.split(":", 1)[1]
@@ -1828,6 +2235,19 @@ async def upgrade_card(callback: types.CallbackQuery):
     await callback.answer()
 
 
+def difficulty_name(level):
+    level = int(level)
+    if level <= 2:
+        return "Новичок"
+    if level <= 4:
+        return "Средний"
+    if level <= 6:
+        return "Опасный"
+    if level <= 8:
+        return "Элита"
+    return "Бог арены"
+
+
 async def show_arena_select(message, user):
     rows = []
     text = (
@@ -1850,7 +2270,7 @@ async def show_difficulty_select(message, user, arena_code):
     rows = []
     for start in [1, 6]:
         rows.append([
-            InlineKeyboardButton(text=str(i), callback_data=f"battle:diff:{arena_code}:{i}")
+            InlineKeyboardButton(text=f"{i} {difficulty_name(i).split()[0]}", callback_data=f"battle:diff:{arena_code}:{i}")
             for i in range(start, start + 5)
         ])
     rows.append([InlineKeyboardButton(text="⬅️ Арены", callback_data="battle:start")])
@@ -1858,7 +2278,7 @@ async def show_difficulty_select(message, user, arena_code):
         f"🤖 <b>Сложность бота</b>\n\n"
         f"{emoji} Арена: <b>{e(arena_name)}</b>\n"
         f"— {e(arena_desc)}.\n\n"
-        "1 — слабый бот, 5 — нормальный, 10 — адская мясорубка.",
+        "1–2 — Новичок, 3–4 — Средний, 5–6 — Опасный, 7–8 — Элита, 9–10 — Бог арены.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         parse_mode="HTML"
     )
@@ -1896,7 +2316,7 @@ async def start_battle_for(message, user, arena_code="random", difficulty=5):
         f"⚔️ <b>Бой с ботом готов</b>\n\n"
         f"{emoji} Арена: <b>{e(arena_name)}</b>\n"
         f"— {e(arena_desc)}.\n"
-        f"🤖 Сложность бота: <b>{difficulty}/10</b>\n\n"
+        f"🤖 Сложность бота: <b>{difficulty}/10 — {e(difficulty_name(difficulty))}</b>\n\n"
         "👤 <b>Твоя колода</b>\n"
     )
     for i, inst in enumerate(player_team, 1):
@@ -2174,7 +2594,7 @@ async def process_solo_fight_round(message, user, player_idx):
     text = (
         f"🎬 <b>Раунд {round_no}</b>\n\n"
         f"{emoji} Арена: <b>{e(arena_name)}</b>\n"
-        f"🤖 Сложность: <b>{state.get('difficulty', 5)}/10</b>\n\n"
+        f"🤖 Сложность: <b>{state.get('difficulty', 5)}/10 — {e(difficulty_name(state.get('difficulty', 5)))}</b>\n\n"
         f"👤 Ты выставил: <b>{e(player_card['name'])}</b> — {rarity_label(player_card['rarity'])}\n"
         f"🤖 Бот выставил: <b>{e(bot_card['name'])}</b> — {rarity_label(bot_card['rarity'])}\n\n"
         f"{line}\n"
@@ -2839,25 +3259,195 @@ async def pvp_pick(callback: types.CallbackQuery):
     await callback.answer()
 
 
-async def resolve_pvp_battle(bid):
+async def start_pvp_interactive_battle(bid):
     state = active_pvp.get(bid)
-    if not state or not state.get("done"):
-        return
-    if state.get("resolved"):
+    if not state or state.get("resolved"):
         return
     p1, p2 = state["players"]
     starters = state.setdefault("starters", {})
     if p1 not in starters or p2 not in starters:
         return
+    state["pvp_fight_round"] = 1
+    state["pvp_points"] = {p1: 0, p2: 0}
+    state["pvp_log"] = []
+    state["pvp_current"] = {p1: int(starters[p1]), p2: int(starters[p2])}
+    state["pvp_remaining"] = {
+        p1: [i for i in range(len(state["teams"][p1])) if i != int(starters[p1])],
+        p2: [i for i in range(len(state["teams"][p2])) if i != int(starters[p2])],
+    }
+    state["pvp_pending"] = {}
+    await resolve_pvp_interactive_round(bid)
 
+
+async def resolve_pvp_interactive_round(bid):
+    state = active_pvp.get(bid)
+    if not state or state.get("resolved"):
+        return
+    p1, p2 = state["players"]
+    round_no = int(state.get("pvp_fight_round", 1))
+    idx1 = int(state["pvp_current"].get(p1, 0))
+    idx2 = int(state["pvp_current"].get(p2, 0))
     n1 = state["names"].get(p1, p1)
     n2 = state["names"].get(p2, p2)
     arena_code = state.get("arena", "void")
-    winner_name, p1_points, p2_points, rounds_text, summary = resolve_step_battle(
-        n1, n2, state["teams"][p1], state["teams"][p2], arena_code, starters.get(p1, 0), starters.get(p2, 0)
+    result, line = duel_line(round_no, n1, n2, state["teams"][p1][idx1], state["teams"][p2][idx2], arena_code)
+    if result == 1:
+        state["pvp_points"][p1] += 1
+    else:
+        state["pvp_points"][p2] += 1
+    state["pvp_log"].append(line)
+    c1 = CARD_BY_ID[state["teams"][p1][idx1]["card_id"]]
+    c2 = CARD_BY_ID[state["teams"][p2][idx2]["card_id"]]
+    score = f"{n1} {state['pvp_points'][p1]} : {state['pvp_points'][p2]} {n2}"
+    text = (
+        f"🎬 <b>PvP Раунд {round_no}/5</b>\n\n"
+        f"👤 {e(n1)} выставил: <b>{e(c1['name'])}</b> — {rarity_label(c1['rarity'])}\n"
+        f"👤 {e(n2)} выставил: <b>{e(c2['name'])}</b> — {rarity_label(c2['rarity'])}\n\n"
+        f"{line}\n"
+        f"📊 <b>Счёт:</b> {e(score)}"
     )
+    for uid in state["players"]:
+        try:
+            await bot.send_message(int(uid), text, parse_mode="HTML")
+        except Exception:
+            pass
 
-    winner_uid, loser_uid = (p1, p2) if winner_name == n1 else (p2, p1)
+    if round_no >= 5 or not state["pvp_remaining"].get(p1) or not state["pvp_remaining"].get(p2):
+        await finish_pvp_interactive(bid)
+        return
+    state["pvp_fight_round"] = round_no + 1
+    state["pvp_pending"] = {}
+    await ask_pvp_next_round(bid)
+
+
+async def ask_pvp_next_round(bid):
+    state = active_pvp.get(bid)
+    if not state or state.get("resolved"):
+        return
+    round_no = int(state.get("pvp_fight_round", 2))
+    for uid in state["players"]:
+        remaining = state["pvp_remaining"].get(uid, [])
+        if not remaining:
+            continue
+        rows = []
+        text = f"➡️ <b>PvP Раунд {round_no}</b>\nВыбери следующего бойца. Противник не увидит выбор заранее.\n⏱ 20 секунд на ход.\n\n"
+        for idx in remaining:
+            inst = state["teams"][uid][idx]
+            c = CARD_BY_ID[inst["card_id"]]
+            text += f"• {idx+1}. {rarity_label(c['rarity'])} <b>{e(c['name'])}</b> | сила {instance_score(inst)}\n"
+            rows.append([InlineKeyboardButton(text=f"Выбрать {idx+1}. {c['name'][:28]}", callback_data=f"pvp_next:{bid}:{round_no}:{idx}")])
+        try:
+            await bot.send_message(int(uid), text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+        except Exception:
+            pass
+        key = ("pvp_next", bid, uid, round_no)
+        cancel_choice_timer(key)
+        choice_timers[key] = asyncio.create_task(auto_pick_pvp_next(bid, uid, round_no))
+
+
+async def auto_pick_pvp_next(bid, uid, expected_round):
+    async def alive():
+        state = active_pvp.get(bid)
+        return bool(state and not state.get("resolved") and int(state.get("pvp_fight_round", 0)) == expected_round and uid not in state.get("pvp_pending", {}) and state.get("pvp_remaining", {}).get(uid))
+    await asyncio.sleep(10)
+    if not await alive():
+        return
+    try:
+        await bot.send_message(int(uid), "⏳ Осталось 10 секунд. Выбери бойца, иначе бот выберет случайно.")
+    except Exception:
+        pass
+    await asyncio.sleep(5)
+    if not await alive():
+        return
+    try:
+        await bot.send_message(int(uid), "⚠️ Осталось 5 секунд. Сейчас выбор станет случайным.")
+    except Exception:
+        pass
+    await asyncio.sleep(5)
+    if not await alive():
+        return
+    state = active_pvp.get(bid)
+    idx = random.choice(state["pvp_remaining"].get(uid, [0]))
+    await set_pvp_next_choice(bid, uid, idx, auto=True)
+
+
+async def set_pvp_next_choice(bid, uid, idx, auto=False):
+    state = active_pvp.get(bid)
+    if not state or state.get("resolved"):
+        return
+    uid = str(uid)
+    round_no = int(state.get("pvp_fight_round", 0))
+    if uid in state.setdefault("pvp_pending", {}):
+        return
+    if idx not in state.get("pvp_remaining", {}).get(uid, []):
+        remaining = state.get("pvp_remaining", {}).get(uid, [])
+        if not remaining:
+            return
+        idx = random.choice(remaining)
+    state["pvp_pending"][uid] = idx
+    if idx in state["pvp_remaining"].get(uid, []):
+        state["pvp_remaining"][uid].remove(idx)
+    try:
+        msg = "⏱ Время вышло. Бот выбрал бойца за тебя." if auto else "✅ Выбор принят. Ждём второго игрока."
+        await bot.send_message(int(uid), msg)
+    except Exception:
+        pass
+    other = pvp_other_player(state, uid)
+    try:
+        await bot.send_message(int(other), f"📌 {e(state['names'].get(uid, uid))} сделал скрытый выбор.", parse_mode="HTML")
+    except Exception:
+        pass
+    if all(u in state.get("pvp_pending", {}) for u in state["players"]):
+        for key in list(choice_timers):
+            if isinstance(key, tuple) and len(key) >= 2 and key[0] == "pvp_next" and key[1] == bid:
+                cancel_choice_timer(key)
+        state["pvp_current"] = dict(state["pvp_pending"])
+        await resolve_pvp_interactive_round(bid)
+
+
+@dp.callback_query(F.data.startswith("pvp_next:"))
+async def pvp_next_cb(callback: types.CallbackQuery):
+    try:
+        _, bid, round_s, idx_s = callback.data.split(":")
+        round_no = int(round_s)
+        idx = int(idx_s)
+    except Exception:
+        await callback.answer("Ошибка PvP-кнопки.", show_alert=True)
+        return
+    state = active_pvp.get(bid)
+    uid = str(callback.from_user.id)
+    if not state or uid not in state.get("players", []):
+        await callback.answer("Этот PvP-бой не найден.", show_alert=True)
+        return
+    if int(state.get("pvp_fight_round", 0)) != round_no:
+        await callback.answer("Старая кнопка.", show_alert=True)
+        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await set_pvp_next_choice(bid, uid, idx, auto=False)
+    await callback.answer("Выбор принят.")
+
+
+async def finish_pvp_interactive(bid):
+    state = active_pvp.get(bid)
+    if not state or state.get("resolved"):
+        return
+    p1, p2 = state["players"]
+    n1 = state["names"].get(p1, p1)
+    n2 = state["names"].get(p2, p2)
+    p1_points = int(state.get("pvp_points", {}).get(p1, 0))
+    p2_points = int(state.get("pvp_points", {}).get(p2, 0))
+    if p1_points == p2_points:
+        total1 = team_score(state["teams"][p1]) + random.randint(-20, 20)
+        total2 = team_score(state["teams"][p2]) + random.randint(-20, 20)
+        winner_uid, loser_uid = (p1, p2) if total1 >= total2 else (p2, p1)
+        tie_text = f"⚖️ Ничья по очкам. Решила общая сила: {total1} vs {total2}.\n"
+    else:
+        winner_uid, loser_uid = (p1, p2) if p1_points > p2_points else (p2, p1)
+        tie_text = ""
+    winner_name = state["names"].get(winner_uid, winner_uid)
 
     if not state.get("scored"):
         if winner_uid in DATA["users"]:
@@ -2880,23 +3470,28 @@ async def resolve_pvp_battle(bid):
 
     team1 = pvp_team_text(f"👤 <b>{e(n1)}</b>", state["teams"][p1])
     team2 = pvp_team_text(f"👤 <b>{e(n2)}</b>", state["teams"][p2])
+    log_text = "\n".join(state.get("pvp_log", []))
     text = (
-        "⚔️ <b>PvP-бой начался</b>\n\n"
-        "🔓 Команды раскрыты только после выбора стартовых персонажей.\n\n"
-        f"{team1}\n{team2}\n"
-        f"🎬 <b>Пошаговый бой</b>\n\n"
-        f"{rounds_text}\n\n"
-        f"{summary}\n\n"
+        "🏁 <b>PvP-бой завершён</b>\n\n"
+        f"{log_text}\n\n"
+        f"🔓 <b>Команды раскрыты</b>\n{team1}\n{team2}\n"
+        f"📊 <b>Итоговый счёт:</b> {e(n1)} {p1_points} : {p2_points} {e(n2)}\n"
+        f"{tie_text}"
+        f"🏆 <b>Победитель:</b> {e(winner_name)}\n\n"
         "🎁 Победитель получает +160 💎 и +120 XP.\n"
         "🎁 Проигравший получает +60 💎 и +60 XP."
     )
-
     state["resolved"] = True
     for uid in state["players"]:
         try:
             await bot.send_message(int(uid), text, reply_markup=back_menu(), parse_mode="HTML")
         except Exception:
             pass
+
+
+async def resolve_pvp_battle(bid):
+    # Совместимость со старыми кнопками: теперь запускает живой PvP по раундам.
+    await start_pvp_interactive_battle(bid)
 
 
 @dp.callback_query(F.data.startswith("pvp_start:"))
@@ -2942,11 +3537,10 @@ async def pvp_start(callback: types.CallbackQuery):
 
     for target in state["players"]:
         try:
-            await bot.send_message(int(target), "⚔️ Оба стартовых персонажа выбраны. Бой начинается по раундам.")
+            await bot.send_message(int(target), "⚔️ Оба стартовых персонажа выбраны. Теперь бой идёт по раундам, с выбором бойца каждый ход.")
         except Exception:
             pass
-    await resolve_pvp_battle(bid)
-
+    await start_pvp_interactive_battle(bid)
 
 @dp.callback_query(F.data.startswith("pvp_sim:"))
 async def pvp_sim(callback: types.CallbackQuery):
@@ -3212,20 +3806,105 @@ async def send_rating(message):
     await message.answer(text, reply_markup=back_menu(), parse_mode="HTML")
 
 
+async def send_events_hub(message, user):
+    p = get_user_data(user)
+    text = (
+        "🏯 <b>Ивенты / турнир / рейд</b>\n\n"
+        "🔥 <b>Ивент дня</b> — лёгкая ежедневная активность за астральные монеты.\n"
+        "🐉 <b>Рейд-босс</b> — ударь боссa силой своей колоды и копи урон.\n"
+        "🏆 <b>Турнир</b> — регистрация и очки активности сезона.\n\n"
+        f"Твои очки турнира: <b>{p.get('tournament_points', 0)}</b>\n"
+        f"Урон по рейду: <b>{p.get('raid_damage', 0)}</b>"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔥 Забрать ивент дня", callback_data="event_daily")],
+        [InlineKeyboardButton(text="🐉 Ударить рейд-босса", callback_data="raid_hit")],
+        [InlineKeyboardButton(text="🏆 Вступить в турнир", callback_data="tournament_join")],
+        [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
+    ])
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@dp.message(Command("events"))
+async def events_cmd(message: types.Message):
+    await send_events_hub(message, message.from_user)
+
+
+@dp.callback_query(F.data == "events")
+async def events_cb(callback: types.CallbackQuery):
+    await send_events_hub(callback.message, callback.from_user)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "event_daily")
+async def event_daily_cb(callback: types.CallbackQuery):
+    p = get_user_data(callback.from_user)
+    today = date.today().isoformat()
+    if p.get("last_event_daily") == today and not is_owner(callback.from_user.id):
+        await callback.answer("Ивент дня уже забран.", show_alert=True)
+        return
+    p["last_event_daily"] = today
+    p["moon_coins"] = int(p.get("moon_coins", 0)) + 2
+    p["pass_xp"] = int(p.get("pass_xp", 0)) + 120
+    save_json(DATA_FILE, DATA)
+    await callback.message.answer("🔥 Ивент дня выполнен: +2 🌘 и +120 очков мультипасса.", reply_markup=back_menu())
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "raid_hit")
+async def raid_hit_cb(callback: types.CallbackQuery):
+    p = get_user_data(callback.from_user)
+    now = datetime.now()
+    last = p.get("last_raid_hit", "")
+    if last and not is_owner(callback.from_user.id):
+        try:
+            if now < datetime.fromisoformat(last) + timedelta(hours=4):
+                await callback.answer("Рейд-удар доступен раз в 4 часа.", show_alert=True)
+                return
+        except Exception:
+            pass
+    dmg = max(100, team_score(build_player_team_from_deck(callback.from_user.id)) + random.randint(50, 300))
+    p["last_raid_hit"] = now.isoformat()
+    p["raid_damage"] = int(p.get("raid_damage", 0)) + dmg
+    reward = max(80, dmg // 20)
+    p["fistiks"] = int(p.get("fistiks", 0)) + reward
+    if random.random() < 0.25:
+        p["moon_coins"] = int(p.get("moon_coins", 0)) + 1
+        extra = " +1 🌘"
+    else:
+        extra = ""
+    save_json(DATA_FILE, DATA)
+    await callback.message.answer(f"🐉 Удар по рейд-боссу: <b>{dmg}</b> урона. Награда: +{reward} 💎{extra}.", reply_markup=back_menu(), parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "tournament_join")
+async def tournament_join_cb(callback: types.CallbackQuery):
+    p = get_user_data(callback.from_user)
+    if p.get("tournament_joined"):
+        await callback.answer("Ты уже в турнире сезона.", show_alert=True)
+        return
+    p["tournament_joined"] = True
+    p["tournament_points"] = int(p.get("tournament_points", 0)) + 1
+    save_json(DATA_FILE, DATA)
+    await callback.message.answer("🏆 Ты зарегистрирован в турнире сезона. Победы в боях и активность будут поднимать очки.", reply_markup=back_menu())
+    await callback.answer()
+
+
 @dp.callback_query(F.data == "cases")
 async def cases(callback: types.CallbackQuery):
     p = get_user_data(callback.from_user)
     balance = int(p.get("moon_coins", 0))
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"⚡ Ивент-кейс — {CASE_PRICES['event']} 🌙", callback_data="case_open:event")],
-        [InlineKeyboardButton(text=f"🎉 Праздничный кейс — {CASE_PRICES['holiday']} 🌙", callback_data="case_open:holiday")],
-        [InlineKeyboardButton(text=f"🔴 Мифический кейс — {CASE_PRICES['mystic']} 🌙", callback_data="case_open:mystic")],
+        [InlineKeyboardButton(text=f"⚡ Ивент-кейс — {CASE_PRICES['event']} 🌘", callback_data="case_open:event")],
+        [InlineKeyboardButton(text=f"🎉 Праздничный кейс — {CASE_PRICES['holiday']} 🌘", callback_data="case_open:holiday")],
+        [InlineKeyboardButton(text=f"🔴 Мифический кейс — {CASE_PRICES['mystic']} 🌘", callback_data="case_open:mystic")],
         [InlineKeyboardButton(text="⬅️ Магазин / награды", callback_data="shop"), InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
     ])
     await callback.message.answer(
-        f"🌙 <b>Кейсы</b>\n\n"
-        f"Твоя валюта кейсов: <b>{balance}</b> 🌙\n\n"
-        "🌙 Лунные монеты выдаются через мультипасс, задания и ивенты.\n"
+        f"🌘 <b>Кейсы</b>\n\n"
+        f"Твоя валюта кейсов: <b>{balance}</b> 🌘\n\n"
+        "🌘 Астральные монеты выдаются через мультипасс, задания и ивенты.\n"
         "Кейсы не покупаются за фисташки.",
         reply_markup=kb,
         parse_mode="HTML"
@@ -3240,7 +3919,7 @@ async def case_open(callback: types.CallbackQuery):
     p = get_user_data(callback.from_user)
     cost = int(CASE_PRICES.get(kind, 5))
     if int(p.get("moon_coins", 0)) < cost and not is_owner(callback.from_user.id):
-        await callback.answer(f"Не хватает лунных монет. Нужно {cost} 🌙.", show_alert=True)
+        await callback.answer(f"Не хватает астральных монет. Нужно {cost} 🌘.", show_alert=True)
         return
     if not is_owner(callback.from_user.id):
         p["moon_coins"] = int(p.get("moon_coins", 0)) - cost
@@ -3248,9 +3927,9 @@ async def case_open(callback: types.CallbackQuery):
     got = []
     pulled = set()
     for _ in range(7):
-        card = roll_card(weights=weights, exclude=pulled)
+        card, pity_note = roll_card_with_pity(p, weights=weights, exclude=pulled)
         pulled.add(card["id"])
-        got.append((card, add_card(p, card["id"], 200)))
+        got.append((card, add_card(p, card["id"], 200) + pity_note))
     add_xp(p, 500)
     save_json(DATA_FILE, DATA)
     await send_pack_result(callback.message, CASE_NAMES.get(kind, f"Кейс {kind}"), got, p)
@@ -3325,7 +4004,7 @@ def format_newbie_tasks(player):
         done = min(int(progress.get(key, 0)), int(task["target"]))
         mark = "✅" if key in claimed else ("🎯" if done >= task["target"] else "▫️")
         reward = task["reward"]
-        moon_part = f" + {reward.get('moon_coins', 0)} 🌙" if reward.get("moon_coins") else ""
+        moon_part = f" + {reward.get('moon_coins', 0)} 🌘" if reward.get("moon_coins") else ""
         lines.append(f"{mark} {task['title']}: {done}/{task['target']} → {reward.get('fistiks', 0)} 💎 + {reward.get('pass_xp', 0)} очков pass{moon_part}")
     return "\n".join(lines)
 
@@ -3382,7 +4061,7 @@ async def newbie_claim_cb(callback: types.CallbackQuery):
             p["pass_xp"] = int(p.get("pass_xp", 0)) + int(reward.get("pass_xp", 0))
             p["moon_coins"] = int(p.get("moon_coins", 0)) + int(reward.get("moon_coins", 0))
             p["newbie_claimed"].append(key)
-            moon_part = f" +{reward.get('moon_coins', 0)} 🌙" if reward.get("moon_coins") else ""
+            moon_part = f" +{reward.get('moon_coins', 0)} 🌘" if reward.get("moon_coins") else ""
             lines.append(f"✅ {e(task['title'])}: +{reward.get('fistiks', 0)} 💎 +{reward.get('pass_xp', 0)} очков pass{moon_part}")
     if not lines:
         await callback.answer("Пока нет выполненных новичковых заданий.", show_alert=True)
@@ -3447,7 +4126,7 @@ def format_pass_rewards(rewards, claimed):
         if "fragments" in reward:
             parts.append(f"{reward['fragments']} фрагментов")
         if "moon_coins" in reward:
-            parts.append(f"{reward['moon_coins']} 🌙")
+            parts.append(f"{reward['moon_coins']} 🌘")
         if "badge" in reward:
             parts.append(f"знак {badge_title(reward['badge'])}")
         lines.append(f"{mark} {lvl} ур. — " + ", ".join(parts))
@@ -3466,7 +4145,7 @@ def grant_pass_reward(player, reward):
         text.append(f"знак {badge_title(reward['badge'])}")
     if "moon_coins" in reward:
         player["moon_coins"] = int(player.get("moon_coins", 0)) + int(reward["moon_coins"])
-        text.append(f"+{reward['moon_coins']} 🌙")
+        text.append(f"+{reward['moon_coins']} 🌘")
     if "fragments" in reward:
         amount = int(reward["fragments"])
         card = roll_card(weights={"Обычный": 500, "Редкий": 300, "Эпический": 160, "Мифический": 35, "Легендарный": 5})
@@ -3529,7 +4208,7 @@ async def send_multipass(message, user):
     ]
     if not p.get("pass_premium") and p.get("pass_purchase_request") != "paid_pending" and not is_owner(user.id):
         rows.append([InlineKeyboardButton(text=f"⭐ Купить премиум за {PASS_PRICE_STARS} Stars", callback_data="buy_pass_stars")])
-    rows.append([InlineKeyboardButton(text="🌙 Кейсы", callback_data="cases"), InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")])
+    rows.append([InlineKeyboardButton(text="🌘 Кейсы", callback_data="cases"), InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")])
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
 
@@ -3873,9 +4552,9 @@ async def mega_buy(callback: types.CallbackQuery):
     for _ in range(amount):
         pulled = set()
         for _j in range(pack["count"]):
-            card = roll_card(weights=pack["weights"], exclude=pulled)
+            card, result = pull_pack_reward(p, pack["weights"], exclude=pulled)
             pulled.add(card["id"])
-            got.append((card, add_card(p, card["id"])))
+            got.append((card, result))
     add_xp(p, 60 * amount)
     add_pass_task_progress(p, "chest", amount)
     add_newbie_task_progress(p, "chest", amount)
@@ -3946,50 +4625,88 @@ async def online_cmd(message: types.Message):
         await message.answer("🌐 Ты в очереди онлайн-боя. Жди второго игрока.", reply_markup=back_menu())
 
 
+def ensure_admin_known_users():
+    DATA.setdefault("users", {})
+    for uid in owner_ids() | right_hand_ids():
+        if uid.isdigit() and uid not in DATA["users"]:
+            DATA["users"][uid] = {
+                "name": "Владелец" if uid in owner_ids() else "Правая рука",
+                "fistiks": 0,
+                "xp": 0,
+                "wins": 0,
+                "losses": 0,
+                "battles": 0,
+                "collection": {},
+                "badges": ["DEV"] if uid in owner_ids() else ["RIGHT_HAND"],
+                "last_seen": "ещё не обновлялся после patch5",
+                "created_at": datetime.now().isoformat(),
+                "banned": False,
+                "frozen": False,
+                "moon_coins": 0,
+            }
+
+
 def short_user_line(uid, p, index=0):
     name = p.get("name") or uid
-    banned = " ⛔" if p.get("banned") else ""
+    flags = []
+    if uid in owner_ids():
+        flags.append("👑")
+    if uid in right_hand_ids():
+        flags.append("🤝")
+    if p.get("banned"):
+        flags.append("⛔")
+    if p.get("frozen"):
+        flags.append("🧊")
     last = p.get("last_seen", "нет")
-    return f"{index}. {e(name)}{banned} — ID <code>{uid}</code> | карт {len(p.get('collection', {}))} | боёв {p.get('battles', 0)} | last {e(last[:16])}"
+    flag_text = " ".join(flags)
+    return f"{index}. {flag_text} {e(name)} — ID <code>{uid}</code> | карт {len(p.get('collection', {}))} | боёв {p.get('battles', 0)} | last {e(str(last)[:16])}"
 
 
 async def send_admin_panel(message, user):
     if not is_owner(user.id):
         await message.answer("⛔ Только владелец мультивселенной имеет доступ.")
         return
+    ensure_admin_known_users()
     users = DATA.get("users", {})
     total = len(users)
     banned = sum(1 for p in users.values() if p.get("banned"))
+    frozen = sum(1 for p in users.values() if p.get("frozen"))
     online = sum(1 for uid in users if is_online(uid))
     paid_pending = sum(1 for p in users.values() if p.get("pass_purchase_request") == "paid_pending")
     text = (
-        "🛠 <b>Админ-панель владельца</b>\n\n"
+        "🛠 <b>Командный центр владельца</b>\n\n"
         f"👥 Игроков всего: <b>{total}</b>\n"
         f"🟢 Онлайн за 10 мин: <b>{online}</b>\n"
         f"⛔ Заблокировано: <b>{banned}</b>\n"
-        f"⭐ Оплаченных мультипассов на подтверждении: <b>{paid_pending}</b>\n\n"
-        "Команды:\n"
-        "<code>/user ID</code> — открыть аккаунт игрока\n"
-        "<code>/ban ID</code> — заблокировать игрока\n"
-        "<code>/unban ID</code> — снять блокировку\n"
-        "<code>/deleteuser ID</code> — удалить аккаунт игрока из базы"
+        f"🧊 Заморожено: <b>{frozen}</b>\n"
+        f"⭐ Оплат мультипасса на подтверждении: <b>{paid_pending}</b>\n\n"
+        "Безопасные команды:\n"
+        "<code>/user ID</code> — открыть аккаунт\n"
+        "<code>/ban ID</code> / <code>/unban ID</code> — бан/разбан\n"
+        "<code>/freeze ID</code> / <code>/unfreeze ID</code> — заморозка\n"
+        "<code>/givef ID AMOUNT</code> — выдать фисташки\n"
+        "<code>/givemoon ID AMOUNT</code> — выдать астральные монеты\n"
+        "<code>/givecard ID CARD_ID</code> — выдать карту\n"
+        "<code>/deleteuser ID</code> — удалить только через подтверждение"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Список игроков", callback_data="admin_users")],
+        [InlineKeyboardButton(text="👥 Все игроки", callback_data="admin_users"), InlineKeyboardButton(text="⭐ Оплаты pass", callback_data="admin_payments")],
         [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu")],
     ])
+    save_json(DATA_FILE, DATA)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def send_admin_users(message, page=0):
+    ensure_admin_known_users()
     users = DATA.get("users", {})
     items = list(users.items())
-    items.sort(key=lambda x: x[1].get("last_seen", ""), reverse=True)
+    items.sort(key=lambda x: (x[0] not in owner_ids(), x[0] not in right_hand_ids(), x[1].get("last_seen", "")), reverse=False)
     per_page = 10
     pages = max(1, (len(items) + per_page - 1) // per_page)
     page = max(0, min(page, pages - 1))
     chunk = items[page * per_page:(page + 1) * per_page]
-    text = f"👥 <b>Игроки</b> — страница {page + 1}/{pages}\n\n"
+    text = f"👥 <b>Все пользователи бота</b> — страница {page + 1}/{pages}\n\n"
     if not chunk:
         text += "Пока пусто."
     rows = []
@@ -4007,7 +4724,26 @@ async def send_admin_users(message, page=0):
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
 
+async def send_admin_payments(message):
+    users = DATA.get("users", {})
+    items = [(uid, p) for uid, p in users.items() if p.get("pass_purchase_request") in {"paid_pending", "paid", "activated", "rejected_after_payment"}]
+    items.sort(key=lambda x: x[1].get("last_seen", ""), reverse=True)
+    text = "⭐ <b>Оплаты мультипасса</b>\n\n"
+    rows = []
+    if not items:
+        text += "Нет оплат на проверке."
+    for uid, p in items[:30]:
+        state = p.get("pass_purchase_request", "")
+        text += f"• <b>{e(p.get('name', uid))}</b> | <code>{uid}</code> | {e(state)} | Stars: {p.get('stars_earned',0)}\n"
+        if state == "paid_pending":
+            rows.append([InlineKeyboardButton(text=f"{p.get('name', uid)[:18]} → 20 ур.", callback_data=f"pass_paid:approve:{uid}:20")])
+            rows.append([InlineKeyboardButton(text="50 ур.", callback_data=f"pass_paid:approve:{uid}:50"), InlineKeyboardButton(text="100 ур.", callback_data=f"pass_paid:approve:{uid}:100"), InlineKeyboardButton(text="Заморозить", callback_data=f"pass_paid:reject:{uid}:0")])
+    rows.append([InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin")])
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+
+
 async def send_admin_user(message, uid):
+    ensure_admin_known_users()
     if str(uid) not in DATA.get("users", {}):
         await message.answer("Игрок не найден.", reply_markup=back_menu())
         return
@@ -4019,17 +4755,22 @@ async def send_admin_user(message, uid):
         f"Имя: <b>{e(p.get('name', uid))}</b>\n"
         f"Уровень: <b>{lvl}</b> ({rem}/{nxt} XP)\n"
         f"💎 Фисташки: <b>{p.get('fistiks', 0)}</b>\n"
-        f"🌙 Лунные монеты: <b>{p.get('moon_coins', 0)}</b>\n"
+        f"🌘 Астральные монеты: <b>{p.get('moon_coins', 0)}</b>\n"
         f"Карт: <b>{len(p.get('collection', {}))}/{len(CARDS)}</b>\n"
         f"Боёв: <b>{p.get('battles', 0)}</b> | Побед: <b>{p.get('wins', 0)}</b> | Поражений: <b>{p.get('losses', 0)}</b>\n"
         f"Мультипасс: <b>{'premium' if p.get('pass_premium') else p.get('pass_purchase_request', 'нет')}</b> | cap {p.get('pass_premium_cap', 0)}\n"
-        f"Бан: <b>{'да' if p.get('banned') else 'нет'}</b>\n"
+        f"Бан: <b>{'да' if p.get('banned') else 'нет'}</b> | Заморозка: <b>{'да' if p.get('frozen') else 'нет'}</b>\n"
+        f"Уведомления сундука: <b>{'вкл' if p.get('notify_free_pack', True) else 'выкл'}</b>\n"
         f"Последний вход: <code>{e(p.get('last_seen', 'нет'))}</code>"
     )
     rows = [
-        [InlineKeyboardButton(text="⛔ Заблокировать", callback_data=f"admin_ban:{uid}"),
-         InlineKeyboardButton(text="✅ Разблокировать", callback_data=f"admin_unban:{uid}")],
-        [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"admin_delete:{uid}")],
+        [InlineKeyboardButton(text="⛔ Бан", callback_data=f"admin_ban:{uid}"),
+         InlineKeyboardButton(text="✅ Разбан", callback_data=f"admin_unban:{uid}")],
+        [InlineKeyboardButton(text="🧊 Заморозить", callback_data=f"admin_freeze:{uid}"),
+         InlineKeyboardButton(text="♨️ Разморозить", callback_data=f"admin_unfreeze:{uid}")],
+        [InlineKeyboardButton(text="💎 +1000", callback_data=f"admin_givef:{uid}:1000"),
+         InlineKeyboardButton(text="🌘 +10", callback_data=f"admin_givemoon:{uid}:10")],
+        [InlineKeyboardButton(text="🗑 Удалить…", callback_data=f"admin_delete_ask:{uid}")],
         [InlineKeyboardButton(text="⬅️ Игроки", callback_data="admin_users"), InlineKeyboardButton(text="⬅️ Админ", callback_data="admin")],
     ]
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
@@ -4043,6 +4784,15 @@ async def admin_cmd(message: types.Message):
 @dp.callback_query(F.data == "admin")
 async def admin_cb(callback: types.CallbackQuery):
     await send_admin_panel(callback.message, callback.from_user)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_payments")
+async def admin_payments_cb(callback: types.CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await send_admin_payments(callback.message)
     await callback.answer()
 
 
@@ -4069,9 +4819,17 @@ async def admin_user_cb(callback: types.CallbackQuery):
 
 def parse_uid_from_text(message):
     parts = message.text.split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip().isdigit():
+    if len(parts) < 2:
         return ""
-    return parts[1].strip()
+    first = parts[1].split()[0].strip()
+    return first if first.isdigit() else ""
+
+
+def parse_two_args(message):
+    parts = message.text.split()
+    if len(parts) < 3:
+        return "", ""
+    return parts[1].strip(), parts[2].strip()
 
 
 @dp.message(Command("user"))
@@ -4095,6 +4853,9 @@ async def ban_cmd(message: types.Message):
     if not uid or uid not in DATA.get("users", {}):
         await message.answer("Формат: /ban ID")
         return
+    if uid in owner_ids():
+        await message.answer("Владельца нельзя заблокировать.")
+        return
     DATA["users"][uid]["banned"] = True
     save_json(DATA_FILE, DATA)
     await message.answer(f"⛔ Игрок <code>{uid}</code> заблокирован.", parse_mode="HTML")
@@ -4114,6 +4875,81 @@ async def unban_cmd(message: types.Message):
     await message.answer(f"✅ Игрок <code>{uid}</code> разблокирован.", parse_mode="HTML")
 
 
+@dp.message(Command("freeze"))
+async def freeze_cmd(message: types.Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("Нет доступа.")
+        return
+    uid = parse_uid_from_text(message)
+    if not uid or uid not in DATA.get("users", {}):
+        await message.answer("Формат: /freeze ID")
+        return
+    if uid in owner_ids():
+        await message.answer("Владельца нельзя заморозить.")
+        return
+    DATA["users"][uid]["frozen"] = True
+    save_json(DATA_FILE, DATA)
+    await message.answer(f"🧊 Аккаунт <code>{uid}</code> заморожен.", parse_mode="HTML")
+
+
+@dp.message(Command("unfreeze"))
+async def unfreeze_cmd(message: types.Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("Нет доступа.")
+        return
+    uid = parse_uid_from_text(message)
+    if not uid or uid not in DATA.get("users", {}):
+        await message.answer("Формат: /unfreeze ID")
+        return
+    DATA["users"][uid]["frozen"] = False
+    save_json(DATA_FILE, DATA)
+    await message.answer(f"♨️ Аккаунт <code>{uid}</code> разморожен.", parse_mode="HTML")
+
+
+@dp.message(Command("givef"))
+async def givef_cmd(message: types.Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("Нет доступа.")
+        return
+    uid, amount_s = parse_two_args(message)
+    if not uid or uid not in DATA.get("users", {}) or not amount_s.lstrip('-').isdigit():
+        await message.answer("Формат: /givef ID AMOUNT")
+        return
+    amount = int(amount_s)
+    DATA["users"][uid]["fistiks"] = int(DATA["users"][uid].get("fistiks", 0)) + amount
+    save_json(DATA_FILE, DATA)
+    await message.answer(f"💎 Игроку <code>{uid}</code> выдано {amount} фисташек.", parse_mode="HTML")
+
+
+@dp.message(Command("givemoon"))
+async def givemoon_cmd(message: types.Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("Нет доступа.")
+        return
+    uid, amount_s = parse_two_args(message)
+    if not uid or uid not in DATA.get("users", {}) or not amount_s.lstrip('-').isdigit():
+        await message.answer("Формат: /givemoon ID AMOUNT")
+        return
+    amount = int(amount_s)
+    DATA["users"][uid]["moon_coins"] = int(DATA["users"][uid].get("moon_coins", 0)) + amount
+    save_json(DATA_FILE, DATA)
+    await message.answer(f"🌘 Игроку <code>{uid}</code> выдано {amount} астральных монет.", parse_mode="HTML")
+
+
+@dp.message(Command("givecard"))
+async def givecard_cmd(message: types.Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("Нет доступа.")
+        return
+    uid, card_id = parse_two_args(message)
+    if not uid or uid not in DATA.get("users", {}) or card_id not in CARD_BY_ID:
+        await message.answer("Формат: /givecard ID CARD_ID")
+        return
+    result = add_card(DATA["users"][uid], card_id)
+    save_json(DATA_FILE, DATA)
+    await message.answer(f"🃏 Игроку <code>{uid}</code>: {e(result)}", parse_mode="HTML")
+
+
 @dp.message(Command("deleteuser"))
 async def deleteuser_cmd(message: types.Message):
     if not is_owner(message.from_user.id):
@@ -4123,9 +4959,15 @@ async def deleteuser_cmd(message: types.Message):
     if not uid or uid not in DATA.get("users", {}):
         await message.answer("Формат: /deleteuser ID")
         return
-    DATA["users"].pop(uid, None)
-    save_json(DATA_FILE, DATA)
-    await message.answer(f"🗑 Аккаунт <code>{uid}</code> удалён из базы.", parse_mode="HTML")
+    if uid in owner_ids():
+        await message.answer("Владельца нельзя удалить.")
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧊 Лучше заморозить", callback_data=f"admin_freeze:{uid}")],
+        [InlineKeyboardButton(text="🗑 Да, удалить навсегда", callback_data=f"admin_delete_confirm:{uid}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_user:{uid}")],
+    ])
+    await message.answer(f"⚠️ Подтверди действие для <code>{uid}</code>. Удаление стирает игрока из базы.", reply_markup=kb, parse_mode="HTML")
 
 
 @dp.callback_query(F.data.startswith("admin_ban:"))
@@ -4134,6 +4976,9 @@ async def admin_ban_cb(callback: types.CallbackQuery):
         await callback.answer("Нет доступа.", show_alert=True)
         return
     uid = callback.data.split(":", 1)[1]
+    if uid in owner_ids():
+        await callback.answer("Владельца нельзя заблокировать.", show_alert=True)
+        return
     if uid in DATA.get("users", {}):
         DATA["users"][uid]["banned"] = True
         save_json(DATA_FILE, DATA)
@@ -4154,17 +4999,89 @@ async def admin_unban_cb(callback: types.CallbackQuery):
     await callback.answer("Игрок разблокирован.")
 
 
-@dp.callback_query(F.data.startswith("admin_delete:"))
-async def admin_delete_cb(callback: types.CallbackQuery):
+@dp.callback_query(F.data.startswith("admin_freeze:"))
+async def admin_freeze_cb(callback: types.CallbackQuery):
     if not is_owner(callback.from_user.id):
         await callback.answer("Нет доступа.", show_alert=True)
         return
     uid = callback.data.split(":", 1)[1]
+    if uid in owner_ids():
+        await callback.answer("Владельца нельзя заморозить.", show_alert=True)
+        return
+    if uid in DATA.get("users", {}):
+        DATA["users"][uid]["frozen"] = True
+        save_json(DATA_FILE, DATA)
+    await send_admin_user(callback.message, uid)
+    await callback.answer("Аккаунт заморожен.")
+
+
+@dp.callback_query(F.data.startswith("admin_unfreeze:"))
+async def admin_unfreeze_cb(callback: types.CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    uid = callback.data.split(":", 1)[1]
+    if uid in DATA.get("users", {}):
+        DATA["users"][uid]["frozen"] = False
+        save_json(DATA_FILE, DATA)
+    await send_admin_user(callback.message, uid)
+    await callback.answer("Аккаунт разморожен.")
+
+
+@dp.callback_query(F.data.startswith("admin_givef:"))
+async def admin_givef_cb(callback: types.CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    _, uid, amount_s = callback.data.split(":")
+    if uid in DATA.get("users", {}):
+        DATA["users"][uid]["fistiks"] = int(DATA["users"][uid].get("fistiks", 0)) + int(amount_s)
+        save_json(DATA_FILE, DATA)
+    await send_admin_user(callback.message, uid)
+    await callback.answer("Фисташки выданы.")
+
+
+@dp.callback_query(F.data.startswith("admin_givemoon:"))
+async def admin_givemoon_cb(callback: types.CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    _, uid, amount_s = callback.data.split(":")
+    if uid in DATA.get("users", {}):
+        DATA["users"][uid]["moon_coins"] = int(DATA["users"][uid].get("moon_coins", 0)) + int(amount_s)
+        save_json(DATA_FILE, DATA)
+    await send_admin_user(callback.message, uid)
+    await callback.answer("Астральные монеты выданы.")
+
+
+@dp.callback_query(F.data.startswith("admin_delete_ask:"))
+async def admin_delete_ask_cb(callback: types.CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    uid = callback.data.split(":", 1)[1]
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧊 Заморозить вместо удаления", callback_data=f"admin_freeze:{uid}")],
+        [InlineKeyboardButton(text="🗑 Да, удалить навсегда", callback_data=f"admin_delete_confirm:{uid}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_user:{uid}")],
+    ])
+    await callback.message.answer(f"⚠️ Точно удалить <code>{uid}</code>? Без подтверждения удаление не выполняется.", reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("admin_delete_confirm:"))
+async def admin_delete_confirm_cb(callback: types.CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    uid = callback.data.split(":", 1)[1]
+    if uid in owner_ids():
+        await callback.answer("Владельца нельзя удалить.", show_alert=True)
+        return
     DATA.get("users", {}).pop(uid, None)
     save_json(DATA_FILE, DATA)
-    await callback.message.answer(f"🗑 Аккаунт <code>{uid}</code> удалён.", reply_markup=back_menu(), parse_mode="HTML")
+    await callback.message.answer(f"🗑 Аккаунт <code>{uid}</code> удалён после подтверждения.", reply_markup=back_menu(), parse_mode="HTML")
     await callback.answer("Удалено.")
-
 
 
 @dp.callback_query(F.data == "noop")
@@ -4185,6 +5102,8 @@ async def free_pack_notifier():
             now = datetime.now()
             changed = False
             for uid, player in list(DATA.get("users", {}).items()):
+                if not player.get("notify_free_pack", True) or player.get("banned") or player.get("frozen"):
+                    continue
                 last_notice = player.get("last_free_notice", "")
                 can_send = True
                 if last_notice:
