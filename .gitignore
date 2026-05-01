@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-.env
-token.txt
-anime_battle_data.json
-anime_battle_data.json.bak
-anime_battle_data.db
-bot_runtime.log
-.DS_Store
