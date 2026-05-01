@@ -1340,7 +1340,8 @@ def main_menu(user_id=None):
 def main_menu_text(user=None):
     return (
         "🌌 <b>Anime Battle Multiverse</b>\n"
-        "Выбери свой путь."
+        "Выбери свой путь.\n\n"
+        "🃏 Собери отряд, открывай персонажей и проходи режимы мультивселенной."
     )
 
 async def maybe_send_luffy_intro(message, user, force=False):
