@@ -1,0 +1,30 @@
+{
+  "START500": {
+    "active": true,
+    "expires": "2027-12-31",
+    "max_uses": 100000,
+    "reward": {
+      "fistiks": 500
+    },
+    "description": "+500 фистиков"
+  },
+  "PACKTEST": {
+    "active": true,
+    "expires": "2027-12-31",
+    "max_uses": 100000,
+    "reward": {
+      "fistiks": 1500
+    },
+    "description": "+1500 фистиков"
+  },
+  "ITACHI": {
+    "active": true,
+    "expires": "2027-12-31",
+    "max_uses": 100000,
+    "reward": {
+      "card": "itachi_akatsuki",
+      "shards": 80
+    },
+    "description": "Итачи +80 осколков"
+  }
+}
