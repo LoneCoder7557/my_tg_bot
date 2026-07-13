@@ -1,0 +1,35 @@
+PATCH40_FINAL_STABLE_HOTFIX — ПОЛНАЯ ЗАМЕНА НА GITHUB + RENDER
+
+1. BACKUP
+- Создай Neon branch/restore point.
+- Убедись, что знаешь текущие BOT_TOKEN, DATABASE_URL и OWNER_ID(S) в Render Environment.
+
+2. GITHUB
+- Удали старые файлы проекта.
+- Распакуй ZIP локально.
+- Загрузи ВСЕ файлы и папки из корня распакованного архива.
+- Не загружай runtime DATA, токены или URL базы.
+
+3. RENDER
+- Environment variables оставь прежними.
+- Python закреплён в .python-version: 3.12.
+- Start command: web: python bot.py.
+- Нажми Clear build cache & deploy.
+
+4. ПЕРВАЯ ПРОВЕРКА
+От владельца:
+/menu
+/storage
+/flush_data
+
+После этого проверь кнопки:
+Призвать → Коллекция → Профиль → Ещё → Шансы призыва.
+
+5. ЧЕГО НЕ ДЕЛАТЬ
+- Не запускай второй экземпляр бота одновременно.
+- Не включай локальный fallback при заданном, но недоступном DATABASE_URL.
+- Не меняй bot.delete_webhook(drop_pending_updates=False).
+- Не запускай /reset_patch40 CONFIRM повторно только ради hotfix.
+
+6. ЕСЛИ ОШИБКА ПОВТОРИТСЯ
+Новая ошибка показывает ID вида AB12CD34. Скопируй этот ID и соответствующий traceback из Render Logs. Владелец также получает тип исключения в Telegram, без утечки BOT_TOKEN/DATABASE_URL.

@@ -1,0 +1,62 @@
+PATCH40_FINAL_STABLE_HOTFIX — FACTUAL TEST REPORT
+Дата сборки: 2026-07-13
+
+ROOT CAUSE REPRODUCTION
+- Создан пользователь с last_seen в формате timezone-aware ISO (+00:00).
+- Старый PATCH40 вызвал TypeError при naive-aware subtraction.
+- После исправления get_user_data, is_online и inactivity checks проходят с aware и legacy-naive timestamps.
+
+STATIC
+PASS python -m py_compile bot.py
+PASS pyflakes bot.py
+PASS static audit: exact callbacks 92
+PASS static audit: dynamic callback prefixes 79
+PASS static audit: commands 51
+PASS callback_data <= 64 bytes for audited static/dynamic paths
+PASS PATCH35 compatibility manifest
+PASS no token-like secret, DATABASE_URL value, __pycache__ or .pyc in clean package
+
+CONTENT / MEDIA
+PASS cards: 17 641
+PASS non-empty unique existing card IDs
+PASS recognized real media IDs: 896
+PASS card_images_bundle_1.zip testzip
+PASS card_images_bundle_2.zip testzip
+
+CORE SIMULATION
+PASS 58/58
+Includes onboarding, old users, tombstones, recovery, referrals, promo max_uses, daily concurrency, seasons, locks, revision saves, Neon fail-closed, payment idempotency, pity, media routing and generated-cache failures.
+
+PATCH40 FEATURE SIMULATION
+PASS 29/29
+Includes full-character first draw, duplicate fragments, legacy fragment upgrade, compact menu, profile/collection count consistency, artifacts, events, owner-only reset semantics, right-hand disabled by default and technical purge behavior.
+
+UI SMOKE
+PASS 14/14 screens
+main, collection home/filter/list, artifacts/detail, profile/stats, modes, events, rewards, more, season, admin.
+Validated HTML/Telegram message construction, reply markup serialization and callback lengths in the test harness.
+
+HOTFIX RUNTIME REGRESSION
+PASS 19/19
+- aware last_seen no crash
+- aware online/inactivity
+- legacy naive timestamp compatibility
+- compact main dashboard fields
+- no character/season/daily/MultiPass text in main dashboard
+- SUMMON_WEIGHTS total
+- exact Absolute base chance 2.5%
+- Super Absolute absent from ordinary weights
+- bulk attempt all-or-nothing
+- legacy case conversion exactly once
+- aware free cooldown
+- custom-emoji keyboard serialization
+- callback_data limit
+
+RUNTIME IMPORT
+PASS import with installed requirements and clean temporary DATA_DIR in available Python runtime.
+
+NOT EXECUTED AS PRODUCTION E2E
+- Live Neon write/read/failover against the user's production database.
+- Real Telegram Stars charge and duplicate delivery from Telegram production.
+- Real Render deployment boot on the user's service.
+These require the user's external accounts and are not claimed as completed.

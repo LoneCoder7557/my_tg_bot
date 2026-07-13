@@ -1,0 +1,28 @@
+PATCH40_FINAL_STABLE_HOTFIX — CHANGELOG
+
+CRITICAL
+- Исправлен global crash всех пользовательских действий из-за смешивания naive и timezone-aware datetime.
+- Добавлен единый парсер legacy/new timestamps в aware UTC.
+- Переведены на UTC сравнения last_seen, inactivity, free draw cooldown, MultiPass, friend gifts, raid windows, newbie windows, online queue и notifier.
+- Улучшен global error handler: error ID для игрока, подробный безопасный диагноз владельцу, полный traceback в Render logs.
+
+UI
+- Главное меню сокращено до имени/титула, мира, клана, силы, числа призывов и валют.
+- Количество персонажей остаётся в профиле.
+- Удалены season timer, MultiPass, daily и подробный draw status из main dashboard.
+
+SUMMONS / CHESTS
+- Единая таблица обычного призыва: Origin 50%, Rare 30%, Epic 12.5%, Legendary 5%, Absolute 2.5%.
+- Super Absolute исключён из обычного пула.
+- Все обычные chest weights используют ту же таблицу.
+- Отдельная продажа сундуков заменена покупкой попыток.
+- Legacy chest callbacks безопасно делегируют обычному призыву.
+- Старый case_inventory конвертируется 1:1 в card_attempts ровно один раз.
+- Bulk x3/x5/x10 списывает попытки атомарно.
+- Полный персонаж выпадает первым экземпляром; дубликат становится фрагментами.
+
+COMPATIBILITY
+- STORAGE_VERSION повышен до 40.1.
+- DATA_SCHEMA_VERSION остаётся 40; destructive migration отсутствует.
+- Нормализация старых коллекций не повторяется из-за смены имени hotfix.
+- Все основные PATCH35–PATCH40 команды и callback aliases сохранены.
